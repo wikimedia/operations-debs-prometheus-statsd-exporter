@@ -1,4 +1,4 @@
-statsd-exporter (0.4.0+git20170831.48.2dfca9b-1) UNRELEASED; urgency=medium
+prometheus-statsd-exporter (0.4.0+git20170831.48.2dfca9b-1~wmf1) stretch-wikimedia; urgency=medium
 
   * Initial release
 
