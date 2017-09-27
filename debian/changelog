@@ -1,0 +1,5 @@
+statsd-exporter (0.4.0+git20170831.48.2dfca9b-1) UNRELEASED; urgency=medium
+
+  * Initial release
+
+ -- Giuseppe Lavagetto <glavagetto@wikimedia.org>  Wed, 27 Sep 2017 16:05:59 +0200
