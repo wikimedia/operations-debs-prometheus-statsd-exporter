@@ -1,0 +1,12 @@
+[Unit]
+Description=Prometheus exporter for statsd
+Documentation=https://prometheus.io/docs/introduction/overview/
+
+[Service]
+Restart=always
+User=prometheus-statsd-exporter
+EnvironmentFile=/etc/default/prometheus-statsd-exporter
+ExecStart=/usr/bin/prometheus-statsd-exporter $ARGS
+
+[Install]
+WantedBy=multi-user.target
