@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/prometheus/statsd_exporter/pkg/mapper"
 )
 
 // TestNegativeCounter validates when we send a negative
@@ -44,7 +46,7 @@ func TestNegativeCounter(t *testing.T) {
 		},
 	}
 	events <- c
-	ex := NewExporter(&metricMapper{}, true)
+	ex := NewExporter(&mapper.MetricMapper{})
 
 	// Close channel to signify we are done with the listener after a short period.
 	go func() {
@@ -60,7 +62,7 @@ func TestNegativeCounter(t *testing.T) {
 // It sends the same tags first with a valid value, then with an invalid one.
 // The exporter should not panic, but drop the invalid event
 func TestInvalidUtf8InDatadogTagValue(t *testing.T) {
-	ex := NewExporter(&metricMapper{}, true)
+	ex := NewExporter(&mapper.MetricMapper{})
 	for _, l := range []statsDPacketHandler{&StatsDUDPListener{}, &mockStatsDTCPListener{}} {
 		events := make(chan Events, 2)
 
@@ -96,8 +98,8 @@ func TestHistogramUnits(t *testing.T) {
 		},
 	}
 	events <- c
-	ex := NewExporter(&metricMapper{}, true)
-	ex.mapper.Defaults.TimerType = timerTypeHistogram
+	ex := NewExporter(&mapper.MetricMapper{})
+	ex.mapper.Defaults.TimerType = mapper.TimerTypeHistogram
 
 	// Close channel to signify we are done with the listener after a short period.
 	go func() {
@@ -105,7 +107,7 @@ func TestHistogramUnits(t *testing.T) {
 		close(events)
 	}()
 	mock := &MockHistogram{}
-	key := hashNameAndLabels(name+"_timer", nil)
+	key := hashNameAndLabels(name, nil)
 	ex.Histograms.Elements[key] = mock
 	ex.Listen(events)
 	if mock.value == 300 {
@@ -124,7 +126,9 @@ type mockStatsDTCPListener struct {
 }
 
 func (ml *mockStatsDTCPListener) handlePacket(packet []byte, e chan<- Events) {
-	lc, err := net.ListenTCP("tcp", nil)
+	// Forcing IPv4 because the TravisCI build environment does not have IPv6
+	// addresses.
+	lc, err := net.ListenTCP("tcp4", nil)
 	if err != nil {
 		panic(fmt.Sprintf("mockStatsDTCPListener: listen failed: %v", err))
 	}
@@ -150,4 +154,22 @@ func (ml *mockStatsDTCPListener) handlePacket(packet []byte, e chan<- Events) {
 		panic(fmt.Sprintf("mockStatsDTCPListener: accept failed: %v", err))
 	}
 	ml.handleConn(sc, e)
+}
+
+func TestEscapeMetricName(t *testing.T) {
+	scenarios := map[string]string{
+		"clean":                   "clean",
+		"0starts_with_digit":      "_0starts_with_digit",
+		"with_underscore":         "with_underscore",
+		"with.dot":                "with_dot",
+		"with😱emoji":              "with_emoji",
+		"with.*.multiple":         "with___multiple",
+		"test.web-server.foo.bar": "test_web_server_foo_bar",
+	}
+
+	for in, want := range scenarios {
+		if got := escapeMetricName(in); want != got {
+			t.Errorf("expected `%s` to be escaped to `%s`, got `%s`", in, want, got)
+		}
+	}
 }
