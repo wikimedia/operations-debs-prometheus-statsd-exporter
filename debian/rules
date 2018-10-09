@@ -1,4 +1,36 @@
 #!/usr/bin/make -f
+include /usr/share/dpkg/pkg-info.mk
+
+export DH_VERBOSE=1
+export DH_GOPKG := github.com/prometheus/statsd_exporter
+
+METAPKG := github.com/prometheus/common
+
+BRANCH     := master
+USER       := "$(shell whoami)@$(shell hostname -f)"
+BUILD_DATE := $(shell date --utc --date='@$(SOURCE_DATE_EPOCH)' \
+    +%Y%m%d-%H:%M:%S)
+GO_VERSION := $(shell go version | sed 's/go version \(\S*\).*/\1/')
+BUILDTAGS  :=
+BUILDFLAGS  = -tags "$(BUILDTAGS)" -ldflags \
+  " -X $(METAPKG)/version.Version=$(DEB_VERSION_UPSTREAM)\
+    -X $(METAPKG)/version.Revision=$(DEB_VERSION)\
+    -X $(METAPKG)/version.Branch=$(BRANCH)\
+    -X $(METAPKG)/version.BuildUser=$(USER)\
+    -X $(METAPKG)/version.BuildDate=$(BUILD_DATE)\
+    -X $(METAPKG)/version.GoVersion=$(GO_VERSION)"
+
 
 %:
-	dh $@ --buildsystem=golang --with=golang
+	dh $@ --buildsystem=golang --with=golang,systemd
+
+override_dh_auto_build:
+	dh_auto_build -O--buildsystem=golang -- $(BUILDFLAGS)
+
+override_dh_auto_install:
+	dh_auto_install
+	# we don't want the golang source (yet?)
+	rm -r debian/$(DEB_SOURCE)/usr/share/gocode
+	# Rename the binary to match the debian package.
+	mv -v debian/$(DEB_SOURCE)/usr/bin/statsd_exporter \
+            debian/$(DEB_SOURCE)/usr/bin/$(DEB_SOURCE)
