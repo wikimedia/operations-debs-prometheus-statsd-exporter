@@ -1,3 +1,12 @@
+prometheus-statsd-exporter (0.7.0-1) jessie-wikimedia; urgency=medium
+
+  * New upstream release
+  * Ship systemd service file and default file
+  * Rename the shipped binary to prometheus-statsd-exporter
+  * Set build flags to get correct version information
+
+ -- Filippo Giunchedi <filippo@debian.org>  Tue, 09 Oct 2018 10:23:02 +0200
+
 prometheus-statsd-exporter (0.4.0+git20170831.48.2dfca9b-1~wmf1) stretch-wikimedia; urgency=medium
 
   * Initial release
