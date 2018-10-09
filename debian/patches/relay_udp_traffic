@@ -1,0 +1,74 @@
+Description: Relay received UDP traffic
+ The purpose of this patch is to allow statsd_exporter to relay all received
+ UDP traffic to an upstream relay, thus allowing statsd_exporter to operate
+ inline with respect to statsd traffic.
+ .
+ Upstream isn't interested in this feature though, see also
+ https://github.com/prometheus/statsd_exporter/issues/95
+--- prometheus-statsd-exporter-0.7.0.orig/exporter.go
++++ prometheus-statsd-exporter-0.7.0/exporter.go
+@@ -543,16 +543,36 @@ samples:
+ }
+ 
+ type StatsDUDPListener struct {
+-	conn *net.UDPConn
++	conn        *net.UDPConn
++	relay_conns []*net.UDPConn
++}
++
++func (l *StatsDUDPListener) AddRelay(conn *net.UDPConn) {
++	l.relay_conns = append(l.relay_conns, conn)
+ }
+ 
+ func (l *StatsDUDPListener) Listen(e chan<- Events) {
++	relay_chan := make(chan []byte)
++	defer close(relay_chan)
++
++	go func(c chan []byte) {
++		for in_bytes := range c {
++			for _, conn := range l.relay_conns {
++				_, err := conn.Write(in_bytes)
++				if err != nil {
++					log.Warn(err)
++				}
++			}
++		}
++	}(relay_chan)
++
+ 	buf := make([]byte, 65535)
+ 	for {
+ 		n, _, err := l.conn.ReadFromUDP(buf)
+ 		if err != nil {
+ 			log.Fatal(err)
+ 		}
++		relay_chan <- buf[0:n]
+ 		l.handlePacket(buf[0:n], e)
+ 	}
+ }
+--- prometheus-statsd-exporter-0.7.0.orig/main.go
++++ prometheus-statsd-exporter-0.7.0/main.go
+@@ -122,6 +122,7 @@ func main() {
+ 	var (
+ 		listenAddress   = kingpin.Flag("web.listen-address", "The address on which to expose the web interface and generated Prometheus metrics.").Default(":9102").String()
+ 		metricsEndpoint = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
++		relayAddress    = kingpin.Flag("statsd.relay-address", "The UDP address to relay received metrics").Default("").String()
+ 		statsdListenUDP = kingpin.Flag("statsd.listen-udp", "The UDP address on which to receive statsd metric lines. \"\" disables it.").Default(":9125").String()
+ 		statsdListenTCP = kingpin.Flag("statsd.listen-tcp", "The TCP address on which to receive statsd metric lines. \"\" disables it.").Default(":9125").String()
+ 		mappingConfig   = kingpin.Flag("statsd.mapping-config", "Metric mapping configuration file name.").String()
+@@ -162,6 +163,16 @@ func main() {
+ 		}
+ 
+ 		ul := &StatsDUDPListener{conn: uconn}
++
++		if *relayAddress != "" {
++			relayAddr := udpAddrFromString(*relayAddress)
++			relayConn, err := net.DialUDP("udp", nil, relayAddr)
++			if err != nil {
++				log.Fatal(err)
++			}
++			ul.AddRelay(relayConn)
++		}
++
+ 		go ul.Listen(events)
+ 	}
+ 
