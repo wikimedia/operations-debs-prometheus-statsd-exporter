@@ -1,6 +1,7 @@
 prometheus-statsd-exporter (0.7.0+ds1-2) stretch-wikimedia; urgency=medium
 
   * Use golang-github-datadog-datadog-go-dev for relay functionality
+  * Add kingpin.v2 build dep
 
  -- Filippo Giunchedi <filippo@debian.org>  Wed, 17 Oct 2018 16:00:13 +0200
 
