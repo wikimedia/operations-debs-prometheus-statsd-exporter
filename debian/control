@@ -9,7 +9,8 @@ Build-Depends: debhelper (>= 10),
                golang-github-howeyc-fsnotify-dev,
                golang-github-prometheus-client-golang-dev,
                golang-github-prometheus-common-dev,
-               golang-gopkg-yaml.v2-dev
+               golang-gopkg-yaml.v2-dev,
+               golang-github-datadog-datadog-go-dev
 Standards-Version: 4.0.0
 Homepage: https://github.com/prometheus/statsd_exporter
 Vcs-Browser: https://anonscm.debian.org/cgit/pkg-go/packages/statsd-exporter.git

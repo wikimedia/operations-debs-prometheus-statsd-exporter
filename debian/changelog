@@ -1,3 +1,9 @@
+prometheus-statsd-exporter (0.7.0+ds1-2) stretch-wikimedia; urgency=medium
+
+  * Use golang-github-datadog-datadog-go-dev for relay functionality
+
+ -- Filippo Giunchedi <filippo@debian.org>  Wed, 17 Oct 2018 16:00:13 +0200
+
 prometheus-statsd-exporter (0.7.0+ds1-1) jessie-wikimedia; urgency=medium
 
   * New upstream release (unvendorized, hence +ds1)

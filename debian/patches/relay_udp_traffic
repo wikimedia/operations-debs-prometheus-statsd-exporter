@@ -5,35 +5,61 @@ Description: Relay received UDP traffic
  .
  Upstream isn't interested in this feature though, see also
  https://github.com/prometheus/statsd_exporter/issues/95
---- prometheus-statsd-exporter-0.7.0.orig/exporter.go
-+++ prometheus-statsd-exporter-0.7.0/exporter.go
-@@ -543,16 +543,36 @@ samples:
+Index: prometheus-statsd-exporter/exporter.go
+===================================================================
+--- prometheus-statsd-exporter.orig/exporter.go
++++ prometheus-statsd-exporter/exporter.go
+@@ -31,6 +31,8 @@ import (
+ 	"github.com/prometheus/common/model"
+ 
+ 	"github.com/prometheus/statsd_exporter/pkg/mapper"
++
++	"github.com/DataDog/datadog-go/statsd"
+ )
+ 
+ const (
+@@ -543,20 +545,66 @@ samples:
  }
  
  type StatsDUDPListener struct {
 -	conn *net.UDPConn
-+	conn        *net.UDPConn
-+	relay_conns []*net.UDPConn
++	conn  *net.UDPConn
++	relay *statsd.Client
 +}
 +
-+func (l *StatsDUDPListener) AddRelay(conn *net.UDPConn) {
-+	l.relay_conns = append(l.relay_conns, conn)
++func (l *StatsDUDPListener) SetRelay(addr string) {
++	client, err := statsd.NewBuffered(addr, 1024)
++	if err != nil {
++		log.Fatal(err)
++	}
++	l.relay = client
++}
++
++func (l *StatsDUDPListener) relayEvents(e <-chan Events) {
++	for {
++		events, ok := <-e
++		if !ok {
++			return
++		}
++		for _, event := range events {
++			switch event.(type) {
++			case *CounterEvent:
++				l.relay.Count(event.MetricName(), int64(event.Value()), nil, 1.0)
++			case *GaugeEvent:
++				l.relay.Gauge(event.MetricName(), event.Value(), nil, 1.0)
++			case *TimerEvent:
++				l.relay.TimeInMilliseconds(event.MetricName(), event.Value(), nil, 1.0)
++			}
++		}
++	}
  }
  
  func (l *StatsDUDPListener) Listen(e chan<- Events) {
-+	relay_chan := make(chan []byte)
++	relay_chan := make(chan Events, 4096)
 +	defer close(relay_chan)
++	defer l.relay.Close()
 +
-+	go func(c chan []byte) {
-+		for in_bytes := range c {
-+			for _, conn := range l.relay_conns {
-+				_, err := conn.Write(in_bytes)
-+				if err != nil {
-+					log.Warn(err)
-+				}
-+			}
-+		}
-+	}(relay_chan)
++	go l.relayEvents(relay_chan)
 +
  	buf := make([]byte, 65535)
  	for {
@@ -41,12 +67,29 @@ Description: Relay received UDP traffic
  		if err != nil {
  			log.Fatal(err)
  		}
-+		relay_chan <- buf[0:n]
++		if l.relay != nil {
++			l.relayPacket(buf[0:n], relay_chan)
++		}
  		l.handlePacket(buf[0:n], e)
  	}
  }
---- prometheus-statsd-exporter-0.7.0.orig/main.go
-+++ prometheus-statsd-exporter-0.7.0/main.go
+ 
++func (l *StatsDUDPListener) relayPacket(packet []byte, e chan<- Events) {
++	lines := strings.Split(string(packet), "\n")
++	events := Events{}
++	for _, line := range lines {
++		events = append(events, lineToEvents(line)...)
++	}
++	e <- events
++}
++
+ func (l *StatsDUDPListener) handlePacket(packet []byte, e chan<- Events) {
+ 	udpPackets.Inc()
+ 	lines := strings.Split(string(packet), "\n")
+Index: prometheus-statsd-exporter/main.go
+===================================================================
+--- prometheus-statsd-exporter.orig/main.go
++++ prometheus-statsd-exporter/main.go
 @@ -122,6 +122,7 @@ func main() {
  	var (
  		listenAddress   = kingpin.Flag("web.listen-address", "The address on which to expose the web interface and generated Prometheus metrics.").Default(":9102").String()
@@ -55,18 +98,13 @@ Description: Relay received UDP traffic
  		statsdListenUDP = kingpin.Flag("statsd.listen-udp", "The UDP address on which to receive statsd metric lines. \"\" disables it.").Default(":9125").String()
  		statsdListenTCP = kingpin.Flag("statsd.listen-tcp", "The TCP address on which to receive statsd metric lines. \"\" disables it.").Default(":9125").String()
  		mappingConfig   = kingpin.Flag("statsd.mapping-config", "Metric mapping configuration file name.").String()
-@@ -162,6 +163,16 @@ func main() {
+@@ -162,6 +163,11 @@ func main() {
  		}
  
  		ul := &StatsDUDPListener{conn: uconn}
 +
 +		if *relayAddress != "" {
-+			relayAddr := udpAddrFromString(*relayAddress)
-+			relayConn, err := net.DialUDP("udp", nil, relayAddr)
-+			if err != nil {
-+				log.Fatal(err)
-+			}
-+			ul.AddRelay(relayConn)
++			ul.SetRelay(*relayAddress)
 +		}
 +
  		go ul.Listen(events)
