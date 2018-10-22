@@ -9,7 +9,15 @@ Index: prometheus-statsd-exporter/exporter.go
 ===================================================================
 --- prometheus-statsd-exporter.orig/exporter.go
 +++ prometheus-statsd-exporter/exporter.go
-@@ -31,6 +31,8 @@ import (
+@@ -24,6 +24,7 @@ import (
+ 	"regexp"
+ 	"strconv"
+ 	"strings"
++	"time"
+ 	"unicode/utf8"
+ 
+ 	"github.com/prometheus/client_golang/prometheus"
+@@ -31,6 +32,8 @@ import (
  	"github.com/prometheus/common/model"
  
  	"github.com/prometheus/statsd_exporter/pkg/mapper"
@@ -18,37 +26,50 @@ Index: prometheus-statsd-exporter/exporter.go
  )
  
  const (
-@@ -543,20 +545,66 @@ samples:
+@@ -543,20 +546,78 @@ samples:
  }
  
  type StatsDUDPListener struct {
 -	conn *net.UDPConn
-+	conn  *net.UDPConn
-+	relay *statsd.Client
++	conn      *net.UDPConn
++	relayAddr string
 +}
 +
 +func (l *StatsDUDPListener) SetRelay(addr string) {
-+	client, err := statsd.NewBuffered(addr, 1024)
-+	if err != nil {
-+		log.Fatal(err)
-+	}
-+	l.relay = client
++	l.relayAddr = string(addr)
 +}
 +
 +func (l *StatsDUDPListener) relayEvents(e <-chan Events) {
++	refreshTicker := time.NewTicker(2 * time.Minute)
++	defer refreshTicker.Stop()
++
++	client, err := statsd.NewBuffered(l.relayAddr, 1024)
++	if err != nil {
++		log.Fatal(err)
++	}
++	defer client.Close()
++
 +	for {
-+		events, ok := <-e
-+		if !ok {
-+			return
-+		}
-+		for _, event := range events {
-+			switch event.(type) {
-+			case *CounterEvent:
-+				l.relay.Count(event.MetricName(), int64(event.Value()), nil, 1.0)
-+			case *GaugeEvent:
-+				l.relay.Gauge(event.MetricName(), event.Value(), nil, 1.0)
-+			case *TimerEvent:
-+				l.relay.TimeInMilliseconds(event.MetricName(), event.Value(), nil, 1.0)
++		select {
++		case events, ok := <-e:
++			if !ok {
++				return
++			}
++			for _, event := range events {
++				switch event.(type) {
++				case *CounterEvent:
++					client.Count(event.MetricName(), int64(event.Value()), nil, 1.0)
++				case *GaugeEvent:
++					client.Gauge(event.MetricName(), event.Value(), nil, 1.0)
++				case *TimerEvent:
++					client.TimeInMilliseconds(event.MetricName(), event.Value(), nil, 1.0)
++				}
++			}
++		case <-refreshTicker.C:
++			client.Close()
++			client, err = statsd.NewBuffered(l.relayAddr, 1024)
++			if err != nil {
++				log.Fatal(err)
 +			}
 +		}
 +	}
@@ -57,7 +78,6 @@ Index: prometheus-statsd-exporter/exporter.go
  func (l *StatsDUDPListener) Listen(e chan<- Events) {
 +	relay_chan := make(chan Events, 4096)
 +	defer close(relay_chan)
-+	defer l.relay.Close()
 +
 +	go l.relayEvents(relay_chan)
 +
@@ -67,7 +87,7 @@ Index: prometheus-statsd-exporter/exporter.go
  		if err != nil {
  			log.Fatal(err)
  		}
-+		if l.relay != nil {
++		if l.relayAddr != "" {
 +			l.relayPacket(buf[0:n], relay_chan)
 +		}
  		l.handlePacket(buf[0:n], e)
