@@ -1,6 +1,9 @@
 prometheus-statsd-exporter (0.8.0+ds1-1) stretch-wikimedia; urgency=medium
 
   * New upstream release
+  * Move to github.com/smira/go-statsd for statsd client functionality.
+    Already includes DNS refresh support and more memory/CPU efficient when
+    handling a lot of statsd traffic.
 
  -- Filippo Giunchedi <filippo@debian.org>  Fri, 02 Nov 2018 14:44:30 +0100
 
