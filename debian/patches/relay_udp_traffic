@@ -22,11 +22,11 @@ Index: prometheus-statsd-exporter/exporter.go
  
  	"github.com/prometheus/statsd_exporter/pkg/mapper"
 +
-+	"github.com/DataDog/datadog-go/statsd"
++	"github.com/smira/go-statsd"
  )
  
  const (
-@@ -543,20 +546,78 @@ samples:
+@@ -543,20 +546,68 @@ samples:
  }
  
  type StatsDUDPListener struct {
@@ -40,13 +40,9 @@ Index: prometheus-statsd-exporter/exporter.go
 +}
 +
 +func (l *StatsDUDPListener) relayEvents(e <-chan Events) {
-+	refreshTicker := time.NewTicker(2 * time.Minute)
-+	defer refreshTicker.Stop()
-+
-+	client, err := statsd.NewBuffered(l.relayAddr, 1024)
-+	if err != nil {
-+		log.Fatal(err)
-+	}
++	client := statsd.NewClient(l.relayAddr,
++		statsd.ReconnectInterval(2*time.Minute),
++	)
 +	defer client.Close()
 +
 +	for {
@@ -58,18 +54,12 @@ Index: prometheus-statsd-exporter/exporter.go
 +			for _, event := range events {
 +				switch event.(type) {
 +				case *CounterEvent:
-+					client.Count(event.MetricName(), int64(event.Value()), nil, 1.0)
++					client.Incr(event.MetricName(), int64(event.Value()))
 +				case *GaugeEvent:
-+					client.Gauge(event.MetricName(), event.Value(), nil, 1.0)
++					client.Gauge(event.MetricName(), int64(event.Value()))
 +				case *TimerEvent:
-+					client.TimeInMilliseconds(event.MetricName(), event.Value(), nil, 1.0)
++					client.Timing(event.MetricName(), int64(event.Value()))
 +				}
-+			}
-+		case <-refreshTicker.C:
-+			client.Close()
-+			client, err = statsd.NewBuffered(l.relayAddr, 1024)
-+			if err != nil {
-+				log.Fatal(err)
 +			}
 +		}
 +	}
@@ -110,7 +100,7 @@ Index: prometheus-statsd-exporter/main.go
 ===================================================================
 --- prometheus-statsd-exporter.orig/main.go
 +++ prometheus-statsd-exporter/main.go
-@@ -122,6 +122,7 @@ func main() {
+@@ -138,6 +138,7 @@ func main() {
  	var (
  		listenAddress   = kingpin.Flag("web.listen-address", "The address on which to expose the web interface and generated Prometheus metrics.").Default(":9102").String()
  		metricsEndpoint = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
@@ -118,7 +108,7 @@ Index: prometheus-statsd-exporter/main.go
  		statsdListenUDP = kingpin.Flag("statsd.listen-udp", "The UDP address on which to receive statsd metric lines. \"\" disables it.").Default(":9125").String()
  		statsdListenTCP = kingpin.Flag("statsd.listen-tcp", "The TCP address on which to receive statsd metric lines. \"\" disables it.").Default(":9125").String()
  		mappingConfig   = kingpin.Flag("statsd.mapping-config", "Metric mapping configuration file name.").String()
-@@ -162,6 +163,11 @@ func main() {
+@@ -179,6 +180,11 @@ func main() {
  		}
  
  		ul := &StatsDUDPListener{conn: uconn}
