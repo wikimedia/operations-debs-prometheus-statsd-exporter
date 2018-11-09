@@ -1,0 +1,1217 @@
+Description: Ship go-statsd client
+Author: Filippo Giunchedi <filippo@debian.org>
+
+--- /dev/null
++++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/LICENSE
+@@ -0,0 +1,23 @@
++The MIT License (MIT)
++
++Copyright (c) 2017 Andrey Smirnov
++Copyright (c) 2015 Alexandre Cesaro
++Copyright (c) 2014 Lorenzo Alberton
++Copyright (c) 2013 Armon Dadgar
++
++Permission is hereby granted, free of charge, to any person obtaining a copy of
++this software and associated documentation files (the "Software"), to deal in
++the Software without restriction, including without limitation the rights to
++use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
++the Software, and to permit persons to whom the Software is furnished to do so,
++subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
++FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
++COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
++IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+--- /dev/null
++++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/Makefile
+@@ -0,0 +1,18 @@
++all: test check bench
++
++deps:
++	go get -v -d -t ./...
++	go get -v github.com/alecthomas/gometalinter
++	gometalinter --install
++
++test: deps
++	go test -race -v -coverprofile=coverage.txt -covermode=atomic
++
++bench: deps
++	go test -v -bench . -benchmem -run nothing ./...
++
++check: deps
++	go test -i
++	gometalinter --vendored-linters --deadline=30s --cyclo-over=15 ./...
++
++.PHONY: deps bench test check
+--- /dev/null
++++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/README.md
+@@ -0,0 +1,137 @@
++# go-statsd
++
++[![Build Status](https://travis-ci.org/smira/go-statsd.svg?branch=master)](https://travis-ci.org/smira/go-statsd)
++[![Documentation](https://godoc.org/github.com/smira/go-statsd?status.svg)](http://godoc.org/github.com/smira/go-statsd)
++[![Go Report Card](https://goreportcard.com/badge/github.com/smira/go-statsd)](https://goreportcard.com/report/github.com/smira/go-statsd)
++[![codecov](https://codecov.io/gh/smira/go-statsd/branch/master/graph/badge.svg)](https://codecov.io/gh/smira/go-statsd)
++[![License](https://img.shields.io/github/license/smira/go-statsd.svg?maxAge=2592000)](https://github.com/smira/go-statsd/LICENSE)
++[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fsmira%2Fgo-statsd.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fsmira%2Fgo-statsd?ref=badge_shield)
++
++Go statsd client library with zero allocation overhead, great performance and automatic
++reconnects.
++
++Client has zero memory allocation per metric sent:
++
++* ring of buffers, each buffer is UDP packet
++* buffer is taken from the pool, filled with metrics, passed on to the network delivery and
++returned to the pool
++* buffer is flushed either when it is full or when flush period comes (e.g. every 100ms)
++* separate goroutines handle network operations: sending UDP packets and reconnecting UDP socket
++* when metric is serialized, zero allocation operations are used to avoid `reflect` and temporary buffers
++
++## Zero memory allocation
++
++As metrics could be sent by the application at very high rate (e.g. hundreds of metrics per one request),
++it is important that sending metrics doesn't cause any additional GC or CPU pressure. `go-statsd` is using
++buffer pools and it tries to avoid allocations while building statsd packets.
++
++## Reconnecting to statsd
++
++With modern container-based platforms with dynamic DNS statsd server might change its address when container
++gets rescheduled. As statsd packets are delivered over UDP, there's no easy way for the client to figure out
++that packets are going nowhere. `go-statsd` supports configurable reconnect interval which forces DNS resolution.
++
++While client is reconnecting, metrics are still processed and buffered.
++
++## Dropping metrics
++
++When buffer pool is exhausted, `go-statsd` starts dropping packets. Number of dropped packets is reported via
++`Client.GetLostPackets()` and every minute logged using `log.Printf()`. Usually packets should never be dropped,
++if that happens it's usually signal of enormous metric volume.
++
++## Stastd server
++
++Any statsd-compatible server should work well with `go-statsd`, [statsite](https://github.com/statsite/statsite) works
++exceptionally well as it has great performance and low memory footprint even with huge number of metrics.
++
++## Usage
++
++Initialize client instance with options, one client per application is usually enough:
++
++```go
++client := statsd.NewClient("localhost:8125",
++    statsd.MaxPacketSize(1400),
++    statsd.MetricPrefix("web."))
++```
++
++Send metrics as events happen in the application, metrics will be packed together and
++delivered to statsd server:
++
++```go
++start := time.Now()
++client.Incr("requests.http", 1)
++// ...
++client.PrecisionTiming("requests.route.api.latency", time.Since(start))
++```
++
++Shutdown client during application shutdown to flush all the pending metrics:
++
++```go
++client.Close()
++```
++
++## Tagging
++
++Metrics could be tagged to support aggregation on TSDB side. go-statsd supports
++tags in [InfluxDB](https://github.com/influxdata/telegraf/tree/master/plugins/inputs/statsd)
++and [Datadog](https://docs.datadoghq.com/developers/dogstatsd/#datagram-format) formats.
++Format and default tags (applied to every metric) are passed as options
++to the client initialization:
++
++```go
++client := statsd.NewClient("localhost:8125",
++    statsd.TagStyle(TagFormatDatadog),
++    statsd.DefaultTags(statsd.StringTag("app", "billing")))
++```
++
++For every metric sent, tags could be added as the last argument(s) to the function
++call:
++
++```go
++client.Incr("request", 1,
++    statsd.StringTag("procotol", "http"), statsd.IntTag("port", 80))
++```
++
++
++## Benchmark
++
++Benchmark comparing several clients:
++
++* https://github.com/alexcesaro/statsd/ (`Alexcesaro`)
++* this client (`GoStatsd`)
++* https://github.com/cactus/go-statsd-client (`Cactus`)
++* https://github.com/peterbourgon/g2s (`G2s`)
++* https://github.com/quipo/statsd (`Quipo`)
++* https://github.com/Unix4ever/statsd (`Unix4ever`)
++
++Benchmark results:
++
++    BenchmarkAlexcesaro-8        	 3000000	       476 ns/op	       0 B/op	       0 allocs/op
++    BenchmarkGoStatsd-8          	 5000000	       266 ns/op	       1 B/op	       0 allocs/op
++    BenchmarkCactus-8            	 2000000	       626 ns/op	      11 B/op	       0 allocs/op
++    BenchmarkG2s-8               	   50000	     20539 ns/op	     576 B/op	      21 allocs/op
++    BenchmarkQuipo-8             	 1000000	      1508 ns/op	     383 B/op	       6 allocs/op
++    BenchmarkUnix4ever-8         	 1000000	      1906 ns/op	     376 B/op	      18 allocs/op
++
++## Origins
++
++Ideas were borrowed from the following stastd clients:
++
++* https://github.com/quipo/statsd (MIT License, https://github.com/quipo/statsd/blob/master/LICENSE)
++* https://github.com/Unix4ever/statsd (MIT License, https://github.com/Unix4ever/statsd/blob/master/LICENSE)
++* https://github.com/alexcesaro/statsd/ (MIT License, https://github.com/alexcesaro/statsd/blob/master/LICENSE)
++* https://github.com/armon/go-metrics (MIT License, https://github.com/armon/go-metrics/blob/master/LICENSE)
++
++## Talks
++
++I gave a talk about design and optimizations which went into go-statsd at
++[Gophercon Russia 2018](https://www.gophercon-russia.ru/):
++[slides](https://talks.godoc.org/github.com/smira/gopherconru2018/go-statsd.slide),
++[source](https://github.com/smira/gopherconru2018).
++
++## License
++
++License is [MIT License](LICENSE).
++
++
++[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fsmira%2Fgo-statsd.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fsmira%2Fgo-statsd?ref=badge_large)
+--- /dev/null
++++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/buffers.go
+@@ -0,0 +1,63 @@
++package statsd
++
++/*
++
++Copyright (c) 2017 Andrey Smirnov
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
++
++*/
++
++import "sync/atomic"
++
++// checkBuf checks current buffer for overflow, and flushes buffer up to lastLen bytes on overflow
++//
++// overflow part is preserved in flushBuf
++func (c *Client) checkBuf(lastLen int) {
++	if len(c.buf) > c.options.MaxPacketSize {
++		c.flushBuf(lastLen)
++	}
++}
++
++// flushBuf sends buffer to the queue and initializes new buffer
++func (c *Client) flushBuf(length int) {
++	sendBuf := c.buf[0:length]
++	tail := c.buf[length:len(c.buf)]
++
++	// get new buffer
++	select {
++	case c.buf = <-c.bufPool:
++		c.buf = c.buf[0:0]
++	default:
++		c.buf = make([]byte, 0, c.bufSize)
++	}
++
++	// copy tail to the new buffer
++	c.buf = append(c.buf, tail...)
++
++	// flush current buffer
++	select {
++	case c.sendQueue <- sendBuf:
++	default:
++		// flush failed, we lost some data
++		atomic.AddInt64(&c.lostPacketsPeriod, 1)
++		atomic.AddInt64(&c.lostPacketsOverall, 1)
++	}
++
++}
+--- /dev/null
++++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/client.go
+@@ -0,0 +1,307 @@
++package statsd
++
++/*
++
++Copyright (c) 2017 Andrey Smirnov
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
++
++*/
++
++import (
++	"log"
++	"os"
++	"strconv"
++	"sync"
++	"sync/atomic"
++	"time"
++)
++
++// Client implements statsd client
++type Client struct {
++	options ClientOptions
++
++	bufPool chan []byte
++	buf     []byte
++	bufSize int
++	bufLock sync.Mutex
++
++	sendQueue chan []byte
++
++	shutdown   chan struct{}
++	shutdownWg sync.WaitGroup
++
++	lostPacketsPeriod, lostPacketsOverall int64
++}
++
++// NewClient creates new statsd client and starts background processing
++//
++// Client connects to statsd server at addr ("host:port")
++//
++// Client settings could be controlled via functions of type Option
++func NewClient(addr string, options ...Option) *Client {
++	c := &Client{
++		options: ClientOptions{
++			Addr:              addr,
++			MetricPrefix:      DefaultMetricPrefix,
++			MaxPacketSize:     DefaultMaxPacketSize,
++			FlushInterval:     DefaultFlushInterval,
++			ReconnectInterval: DefaultReconnectInterval,
++			ReportInterval:    DefaultReportInterval,
++			RetryTimeout:      DefaultRetryTimeout,
++			Logger:            log.New(os.Stderr, DefaultLogPrefix, log.LstdFlags),
++			BufPoolCapacity:   DefaultBufPoolCapacity,
++			SendQueueCapacity: DefaultSendQueueCapacity,
++			SendLoopCount:     DefaultSendLoopCount,
++			TagFormat:         TagFormatInfluxDB,
++		},
++
++		shutdown: make(chan struct{}),
++	}
++
++	// 1024 is room for overflow metric
++	c.bufSize = c.options.MaxPacketSize + 1024
++
++	for _, option := range options {
++		option(&c.options)
++	}
++
++	c.buf = make([]byte, 0, c.bufSize)
++	c.bufPool = make(chan []byte, c.options.BufPoolCapacity)
++	c.sendQueue = make(chan []byte, c.options.SendQueueCapacity)
++
++	go c.flushLoop()
++
++	for i := 0; i < c.options.SendLoopCount; i++ {
++		c.shutdownWg.Add(1)
++		go c.sendLoop()
++	}
++
++	if c.options.ReportInterval > 0 {
++		c.shutdownWg.Add(1)
++		go c.reportLoop()
++	}
++
++	return c
++}
++
++// Close stops the client
++func (c *Client) Close() error {
++	close(c.shutdown)
++	c.shutdownWg.Wait()
++
++	return nil
++}
++
++// GetLostPackets returns number of packets lost during client lifecycle
++func (c *Client) GetLostPackets() int64 {
++	return atomic.LoadInt64(&c.lostPacketsOverall)
++}
++
++// Incr increments a counter metric
++//
++// Often used to note a particular event, for example incoming web request.
++func (c *Client) Incr(stat string, count int64, tags ...Tag) {
++	if 0 != count {
++		c.bufLock.Lock()
++		lastLen := len(c.buf)
++
++		c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
++		c.buf = append(c.buf, []byte(stat)...)
++		if c.options.TagFormat.Placement == TagPlacementName {
++			c.buf = c.formatTags(c.buf, tags)
++		}
++		c.buf = append(c.buf, ':')
++		c.buf = strconv.AppendInt(c.buf, count, 10)
++		c.buf = append(c.buf, []byte("|c")...)
++		if c.options.TagFormat.Placement == TagPlacementSuffix {
++			c.buf = c.formatTags(c.buf, tags)
++		}
++		c.buf = append(c.buf, '\n')
++
++		c.checkBuf(lastLen)
++		c.bufLock.Unlock()
++	}
++}
++
++// Decr decrements a counter metri
++//
++// Often used to note a particular event
++func (c *Client) Decr(stat string, count int64, tags ...Tag) {
++	c.Incr(stat, -count, tags...)
++}
++
++// Timing tracks a duration event, the time delta must be given in milliseconds
++func (c *Client) Timing(stat string, delta int64, tags ...Tag) {
++	c.bufLock.Lock()
++	lastLen := len(c.buf)
++
++	c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
++	c.buf = append(c.buf, []byte(stat)...)
++	if c.options.TagFormat.Placement == TagPlacementName {
++		c.buf = c.formatTags(c.buf, tags)
++	}
++	c.buf = append(c.buf, ':')
++	c.buf = strconv.AppendInt(c.buf, delta, 10)
++	c.buf = append(c.buf, []byte("|ms")...)
++	if c.options.TagFormat.Placement == TagPlacementSuffix {
++		c.buf = c.formatTags(c.buf, tags)
++	}
++	c.buf = append(c.buf, '\n')
++
++	c.checkBuf(lastLen)
++	c.bufLock.Unlock()
++}
++
++// PrecisionTiming track a duration event, the time delta has to be a duration
++//
++// Usually request processing time, time to run database query, etc. are used with
++// this metric type.
++func (c *Client) PrecisionTiming(stat string, delta time.Duration, tags ...Tag) {
++	c.bufLock.Lock()
++	lastLen := len(c.buf)
++
++	c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
++	c.buf = append(c.buf, []byte(stat)...)
++	if c.options.TagFormat.Placement == TagPlacementName {
++		c.buf = c.formatTags(c.buf, tags)
++	}
++	c.buf = append(c.buf, ':')
++	c.buf = strconv.AppendFloat(c.buf, float64(delta)/float64(time.Millisecond), 'f', -1, 64)
++	c.buf = append(c.buf, []byte("|ms")...)
++	if c.options.TagFormat.Placement == TagPlacementSuffix {
++		c.buf = c.formatTags(c.buf, tags)
++	}
++	c.buf = append(c.buf, '\n')
++
++	c.checkBuf(lastLen)
++	c.bufLock.Unlock()
++}
++
++func (c *Client) igauge(stat string, sign []byte, value int64, tags ...Tag) {
++	c.bufLock.Lock()
++	lastLen := len(c.buf)
++
++	c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
++	c.buf = append(c.buf, []byte(stat)...)
++	if c.options.TagFormat.Placement == TagPlacementName {
++		c.buf = c.formatTags(c.buf, tags)
++	}
++	c.buf = append(c.buf, ':')
++	c.buf = append(c.buf, sign...)
++	c.buf = strconv.AppendInt(c.buf, value, 10)
++	c.buf = append(c.buf, []byte("|g")...)
++	if c.options.TagFormat.Placement == TagPlacementSuffix {
++		c.buf = c.formatTags(c.buf, tags)
++	}
++	c.buf = append(c.buf, '\n')
++
++	c.checkBuf(lastLen)
++	c.bufLock.Unlock()
++}
++
++// Gauge sets or updates constant value for the interval
++//
++// Gauges are a constant data type. They are not subject to averaging,
++// and they don’t change unless you change them. That is, once you set a gauge value,
++// it will be a flat line on the graph until you change it again. If you specify
++// delta to be true, that specifies that the gauge should be updated, not set. Due to the
++// underlying protocol, you can't explicitly set a gauge to a negative number without
++// first setting it to zero.
++func (c *Client) Gauge(stat string, value int64, tags ...Tag) {
++	if value < 0 {
++		c.igauge(stat, nil, 0, tags...)
++	}
++
++	c.igauge(stat, nil, value, tags...)
++}
++
++// GaugeDelta sends a change for a gauge
++func (c *Client) GaugeDelta(stat string, value int64, tags ...Tag) {
++	// Gauge Deltas are always sent with a leading '+' or '-'. The '-' takes care of itself but the '+' must added by hand
++	if value < 0 {
++		c.igauge(stat, nil, value, tags...)
++	} else {
++		c.igauge(stat, []byte{'+'}, value, tags...)
++	}
++}
++
++func (c *Client) fgauge(stat string, sign []byte, value float64, tags ...Tag) {
++	c.bufLock.Lock()
++	lastLen := len(c.buf)
++
++	c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
++	c.buf = append(c.buf, []byte(stat)...)
++	if c.options.TagFormat.Placement == TagPlacementName {
++		c.buf = c.formatTags(c.buf, tags)
++	}
++	c.buf = append(c.buf, ':')
++	c.buf = append(c.buf, sign...)
++	c.buf = strconv.AppendFloat(c.buf, value, 'f', -1, 64)
++	c.buf = append(c.buf, []byte("|g")...)
++	if c.options.TagFormat.Placement == TagPlacementSuffix {
++		c.buf = c.formatTags(c.buf, tags)
++	}
++	c.buf = append(c.buf, '\n')
++
++	c.checkBuf(lastLen)
++	c.bufLock.Unlock()
++}
++
++// FGauge sends a floating point value for a gauge
++func (c *Client) FGauge(stat string, value float64, tags ...Tag) {
++	if value < 0 {
++		c.igauge(stat, nil, 0, tags...)
++	}
++
++	c.fgauge(stat, nil, value, tags...)
++}
++
++// FGaugeDelta sends a floating point change for a gauge
++func (c *Client) FGaugeDelta(stat string, value float64, tags ...Tag) {
++	if value < 0 {
++		c.fgauge(stat, nil, value, tags...)
++	} else {
++		c.fgauge(stat, []byte{'+'}, value, tags...)
++	}
++}
++
++// SetAdd adds unique element to a set
++//
++// Statsd server will provide cardinality of the set over aggregation period.
++func (c *Client) SetAdd(stat string, value string, tags ...Tag) {
++	c.bufLock.Lock()
++	lastLen := len(c.buf)
++
++	c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
++	c.buf = append(c.buf, []byte(stat)...)
++	if c.options.TagFormat.Placement == TagPlacementName {
++		c.buf = c.formatTags(c.buf, tags)
++	}
++	c.buf = append(c.buf, ':')
++	c.buf = append(c.buf, []byte(value)...)
++	c.buf = append(c.buf, []byte("|s")...)
++	if c.options.TagFormat.Placement == TagPlacementSuffix {
++		c.buf = c.formatTags(c.buf, tags)
++	}
++	c.buf = append(c.buf, '\n')
++
++	c.checkBuf(lastLen)
++	c.bufLock.Unlock()
++}
+--- /dev/null
++++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/loops.go
+@@ -0,0 +1,142 @@
++package statsd
++
++/*
++
++Copyright (c) 2017 Andrey Smirnov
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
++
++*/
++
++import (
++	"net"
++	"sync/atomic"
++	"time"
++)
++
++// flushLoop makes sure metrics are flushed every flushInterval
++func (c *Client) flushLoop() {
++	var flushC <-chan time.Time
++
++	if c.options.FlushInterval > 0 {
++		flushTicker := time.NewTicker(c.options.FlushInterval)
++		defer flushTicker.Stop()
++		flushC = flushTicker.C
++	}
++
++	for {
++		select {
++		case <-c.shutdown:
++			c.bufLock.Lock()
++			if len(c.buf) > 0 {
++				c.flushBuf(len(c.buf))
++			}
++			c.bufLock.Unlock()
++
++			close(c.sendQueue)
++			return
++		case <-flushC:
++			c.bufLock.Lock()
++			if len(c.buf) > 0 {
++				c.flushBuf(len(c.buf))
++			}
++			c.bufLock.Unlock()
++		}
++	}
++}
++
++// sendLoop handles packet delivery over UDP and periodic reconnects
++func (c *Client) sendLoop() {
++	var (
++		sock       net.Conn
++		err        error
++		reconnectC <-chan time.Time
++	)
++
++	if c.options.ReconnectInterval > 0 {
++		reconnectTicker := time.NewTicker(c.options.ReconnectInterval)
++		defer reconnectTicker.Stop()
++		reconnectC = reconnectTicker.C
++	}
++
++RECONNECT:
++	// Attempt to connect
++	sock, err = net.Dial("udp", c.options.Addr)
++	if err != nil {
++		c.options.Logger.Printf("[STATSD] Error connecting to server: %s", err)
++		goto WAIT
++	}
++
++	for {
++		select {
++		case buf, ok := <-c.sendQueue:
++			// Get a buffer from the queue
++			if !ok {
++				_ = sock.Close() // nolint: gosec
++				c.shutdownWg.Done()
++				return
++			}
++
++			if len(buf) > 0 {
++				// cut off \n in the end
++				_, err := sock.Write(buf[0 : len(buf)-1])
++				if err != nil {
++					c.options.Logger.Printf("[STATSD] Error writing to socket: %s", err)
++					_ = sock.Close() // nolint: gosec
++					goto WAIT
++				}
++			}
++
++			// return buffer to the pool
++			select {
++			case c.bufPool <- buf:
++			default:
++				// pool is full, let GC handle the buf
++			}
++		case <-reconnectC:
++			_ = sock.Close() // nolint: gosec
++			goto RECONNECT
++		}
++	}
++
++WAIT:
++	// Wait for a while
++	time.Sleep(c.options.RetryTimeout)
++	goto RECONNECT
++}
++
++// reportLoop reports periodically number of packets lost
++func (c *Client) reportLoop() {
++	defer c.shutdownWg.Done()
++
++	reportTicker := time.NewTicker(c.options.ReportInterval)
++	defer reportTicker.Stop()
++
++	for {
++		select {
++		case <-c.shutdown:
++			return
++		case <-reportTicker.C:
++			lostPeriod := atomic.SwapInt64(&c.lostPacketsPeriod, 0)
++			if lostPeriod > 0 {
++				c.options.Logger.Printf("[STATSD] %d packets lost (overflow)", lostPeriod)
++			}
++		}
++	}
++}
+--- /dev/null
++++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/options.go
+@@ -0,0 +1,263 @@
++package statsd
++
++/*
++
++Copyright (c) 2017 Andrey Smirnov
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
++
++*/
++
++import (
++	"time"
++)
++
++// Default settings
++const (
++	DefaultMaxPacketSize     = 1432
++	DefaultMetricPrefix      = ""
++	DefaultFlushInterval     = 100 * time.Millisecond
++	DefaultReconnectInterval = time.Duration(0)
++	DefaultReportInterval    = time.Minute
++	DefaultRetryTimeout      = 5 * time.Second
++	DefaultLogPrefix         = "[STATSD] "
++	DefaultBufPoolCapacity   = 20
++	DefaultSendQueueCapacity = 10
++	DefaultSendLoopCount     = 1
++)
++
++// SomeLogger defines logging interface that allows using 3rd party loggers
++// (e.g. github.com/sirupsen/logrus) with this Statsd client.
++type SomeLogger interface {
++	Printf(fmt string, args ...interface{})
++}
++
++// ClientOptions are statsd client settings
++type ClientOptions struct {
++	// Addr is statsd server address in "host:port" format
++	Addr string
++
++	// MetricPrefix is prefix to prepend to every metric being sent
++	//
++	// If not set defaults to empty string
++	MetricPrefix string
++
++	// MaxPacketSize is maximum UDP packet size
++	//
++	// Safe value is 1432 bytes, if your network supports jumbo frames,
++	// this value could be raised up to 8960 bytes
++	MaxPacketSize int
++
++	// FlushInterval controls flushing incomplete UDP packets which makes
++	// sure metric is not delayed longer than FlushInterval
++	//
++	// Default value is 100ms, setting FlushInterval to zero disables flushing
++	FlushInterval time.Duration
++
++	// ReconnectInterval controls UDP socket reconnects
++	//
++	// Reconnecting is important to follow DNS changes, e.g. in
++	// dynamic container environments like K8s where statsd server
++	// instance might be relocated leading to new IP address.
++	//
++	// By default reconnects are disabled
++	ReconnectInterval time.Duration
++
++	// RetryTimeout controls how often client should attempt reconnecting
++	// to statsd server on failure
++	//
++	// Default value is 5 seconds
++	RetryTimeout time.Duration
++
++	// ReportInterval instructs client to report number of packets lost
++	// each interval via Logger
++	//
++	// By default lost packets are reported every minute, setting to zero
++	// disables reporting
++	ReportInterval time.Duration
++
++	// Logger is used by statsd client to report errors and lost packets
++	//
++	// If not set, default logger to stderr with prefix `[STATSD] ` is being used
++	Logger SomeLogger
++
++	// BufPoolCapacity controls size of pre-allocated buffer cache
++	//
++	// Each buffer is MaxPacketSize. Cache allows to avoid allocating
++	// new buffers during high load
++	//
++	// Default value is DefaultBufPoolCapacity
++	BufPoolCapacity int
++
++	// SendQueueCapacity controls length of the queue of packet ready to be sent
++	//
++	// Packets might stay in the queue during short load bursts or while
++	// client is reconnecting to statsd
++	//
++	// Default value is DefaultSendQueueCapacity
++	SendQueueCapacity int
++
++	// SendLoopCount controls number of goroutines sending UDP packets
++	//
++	// Default value is 1, so packets are sent from single goroutine, this
++	// value might need to be bumped under high load
++	SendLoopCount int
++
++	// TagFormat controls formatting of StatsD tags
++	//
++	// If tags are not used, value of this setting isn't used.
++	//
++	// There are two predefined formats: for InfluxDB and Datadog, default
++	// format is InfluxDB tag format.
++	TagFormat *TagFormat
++
++	// DefaultTags is a list of tags to be applied to every metric
++	DefaultTags []Tag
++}
++
++// Option is type for option implementation
++type Option func(c *ClientOptions)
++
++// MetricPrefix is prefix to prepend to every metric being sent
++//
++// Usually metrics are prefixed with app name, e.g. `app.`.
++// To avoid providing this prefix for every metric being collected,
++// and to enable shared libraries to collect metric under app name,
++// use MetricPrefix to set global prefix for all the app metrics,
++// e.g. `MetricPrefix("app".)`.
++//
++// If not set defaults to empty string
++func MetricPrefix(prefix string) Option {
++	return func(c *ClientOptions) {
++		c.MetricPrefix = prefix
++	}
++}
++
++// MaxPacketSize control maximum UDP packet size
++//
++// Default value is DefaultMaxPacketSize
++func MaxPacketSize(packetSize int) Option {
++	return func(c *ClientOptions) {
++		c.MaxPacketSize = packetSize
++	}
++}
++
++// FlushInterval controls flushing incomplete UDP packets which makes
++// sure metric is not delayed longer than FlushInterval
++//
++// Default value is 100ms, setting FlushInterval to zero disables flushing
++func FlushInterval(interval time.Duration) Option {
++	return func(c *ClientOptions) {
++		c.FlushInterval = interval
++	}
++}
++
++// ReconnectInterval controls UDP socket reconnects
++//
++// Reconnecting is important to follow DNS changes, e.g. in
++// dynamic container environments like K8s where statsd server
++// instance might be relocated leading to new IP address.
++//
++// By default reconnects are disabled
++func ReconnectInterval(interval time.Duration) Option {
++	return func(c *ClientOptions) {
++		c.ReconnectInterval = interval
++	}
++}
++
++// RetryTimeout controls how often client should attempt reconnecting
++// to statsd server on failure
++//
++// Default value is 5 seconds
++func RetryTimeout(timeout time.Duration) Option {
++	return func(c *ClientOptions) {
++		c.RetryTimeout = timeout
++	}
++}
++
++// ReportInterval instructs client to report number of packets lost
++// each interval via Logger
++//
++// By default lost packets are reported every minute, setting to zero
++// disables reporting
++func ReportInterval(interval time.Duration) Option {
++	return func(c *ClientOptions) {
++		c.ReportInterval = interval
++	}
++}
++
++// Logger is used by statsd client to report errors and lost packets
++//
++// If not set, default logger to stderr with prefix `[STATSD] ` is being used
++func Logger(logger SomeLogger) Option {
++	return func(c *ClientOptions) {
++		c.Logger = logger
++	}
++}
++
++// BufPoolCapacity controls size of pre-allocated buffer cache
++//
++// Each buffer is MaxPacketSize. Cache allows to avoid allocating
++// new buffers during high load
++//
++// Default value is DefaultBufPoolCapacity
++func BufPoolCapacity(capacity int) Option {
++	return func(c *ClientOptions) {
++		c.BufPoolCapacity = capacity
++	}
++}
++
++// SendQueueCapacity controls length of the queue of packet ready to be sent
++//
++// Packets might stay in the queue during short load bursts or while
++// client is reconnecting to statsd
++//
++// Default value is DefaultSendQueueCapacity
++func SendQueueCapacity(capacity int) Option {
++	return func(c *ClientOptions) {
++		c.SendQueueCapacity = capacity
++	}
++}
++
++// SendLoopCount controls number of goroutines sending UDP packets
++//
++// Default value is 1, so packets are sent from single goroutine, this
++// value might need to be bumped under high load
++func SendLoopCount(threads int) Option {
++	return func(c *ClientOptions) {
++		c.SendLoopCount = threads
++	}
++}
++
++// TagStyle controls formatting of StatsD tags
++//
++// There are two predefined formats: for InfluxDB and Datadog, default
++// format is InfluxDB tag format.
++func TagStyle(style *TagFormat) Option {
++	return func(c *ClientOptions) {
++		c.TagFormat = style
++	}
++}
++
++// DefaultTags defines a list of tags to be applied to every metric
++func DefaultTags(tags ...Tag) Option {
++	return func(c *ClientOptions) {
++		c.DefaultTags = tags
++	}
++}
+--- /dev/null
++++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/statsd.go
+@@ -0,0 +1,88 @@
++/*
++Package statsd implements high-performance, zero-allocation statsd client.
++
++Go statsd client library with zero allocation overhead, great performance and automatic
++reconnects.
++
++With statsd architecture aggregation is performed on statsd server side (e.g. using
++high-performance servers like statsite), so application emits many metrics per user action.
++Performance of statsd client library is critical to introduce as little overhead as possible.
++
++Client has zero memory allocation per metric being sent, architecture is the following:
++
++ * there's ring of buffers, each buffer is UDP packet
++ * buffer is taken from the pool, filled with metrics, passed on to the network delivery and
++   passed back to the pool
++ * buffer is flushed either when it is full or when flush period comes (e.g. every 100ms)
++ * separate goroutine is handling network operations: sending UDP packets and reconnecting UDP socket
++   (to handle statsd DNS address change)
++ * when metric is serialized, zero allocation methods are used to avoid `reflect` and memory allocation
++
++Ideas were borrowed from the following stastd clients:
++
++ * https://github.com/quipo/statsd
++ * https://github.com/Unix4ever/statsd
++ * https://github.com/alexcesaro/statsd/
++ * https://github.com/armon/go-metrics
++
++Usage
++
++Initialize client instance with options, one client per application is usually enough:
++
++    client := statsd.NewClient("localhost:8125",
++        statsd.MaxPacketSize(1400),
++        statsd.MetricPrefix("web."))
++
++Send metrics as events happen in the application, metrics will be packed together and
++delivered to statsd server:
++
++    start := time.Now()
++    client.Incr("requests.http", 1)
++    ...
++    client.PrecisionTiming("requests.route.api.latency", time.Since(start))
++
++Shutdown client during application shutdown to flush all the pending metrics:
++
++    client.Close()
++
++Tagging
++
++Metrics could be tagged to support aggregation on TSDB side. go-statsd supports
++tags in InfluxDB and Datadog formats. Format and default tags (applied to every
++metric) are passed as options to the client initialization:
++
++    client := statsd.NewClient("localhost:8125",
++        statsd.TagStyle(TagFormatDatadog),
++        statsd.DefaultTags(statsd.StringTag("app", "billing")))
++
++For every metric sent, tags could be added as the last argument(s) to the function
++call:
++
++    client.Incr("request", 1,
++        statsd.StringTag("procotol", "http"), statsd.IntTag("port", 80))
++*/
++package statsd
++
++/*
++
++Copyright (c) 2017 Andrey Smirnov
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
++
++*/
+--- /dev/null
++++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/tags.go
+@@ -0,0 +1,130 @@
++package statsd
++
++/*
++
++Copyright (c) 2018 Andrey Smirnov
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
++
++*/
++
++import "strconv"
++
++// Tag placement constants
++const (
++	TagPlacementName = iota
++	TagPlacementSuffix
++)
++
++// TagFormat controls tag formatting style
++type TagFormat struct {
++	// FirstSeparator is put after metric name and before first tag
++	FirstSeparator string
++	// Placement specifies part of the message to append tags to
++	Placement byte
++	// OtherSeparator separates 2nd and subsequent tags from each other
++	OtherSeparator byte
++	// KeyValueSeparator separates tag name and tag value
++	KeyValueSeparator byte
++}
++
++// Tag types
++const (
++	typeString = iota
++	typeInt64
++)
++
++// Tag is metric-specific tag
++type Tag struct {
++	name     string
++	strvalue string
++	intvalue int64
++	typ      byte
++}
++
++// Append formats tag and appends it to the buffer
++func (tag Tag) Append(buf []byte, style *TagFormat) []byte {
++	buf = append(buf, []byte(tag.name)...)
++	buf = append(buf, style.KeyValueSeparator)
++	if tag.typ == typeString {
++		return append(buf, []byte(tag.strvalue)...)
++	}
++	return strconv.AppendInt(buf, tag.intvalue, 10)
++}
++
++// StringTag creates Tag with string value
++func StringTag(name, value string) Tag {
++	return Tag{name: name, strvalue: value, typ: typeString}
++}
++
++// IntTag creates Tag with integer value
++func IntTag(name string, value int) Tag {
++	return Tag{name: name, intvalue: int64(value), typ: typeInt64}
++}
++
++// Int64Tag creates Tag with integer value
++func Int64Tag(name string, value int64) Tag {
++	return Tag{name: name, intvalue: value, typ: typeInt64}
++}
++
++func (c *Client) formatTags(buf []byte, tags []Tag) []byte {
++	tagsLen := len(c.options.DefaultTags) + len(tags)
++	if tagsLen == 0 {
++		return buf
++	}
++
++	buf = append(buf, []byte(c.options.TagFormat.FirstSeparator)...)
++	for i := range c.options.DefaultTags {
++		buf = c.options.DefaultTags[i].Append(buf, c.options.TagFormat)
++		if i != tagsLen-1 {
++			buf = append(buf, c.options.TagFormat.OtherSeparator)
++		}
++	}
++
++	for i := range tags {
++		buf = tags[i].Append(buf, c.options.TagFormat)
++		if i+len(c.options.DefaultTags) != tagsLen-1 {
++			buf = append(buf, c.options.TagFormat.OtherSeparator)
++		}
++	}
++
++	return buf
++}
++
++var (
++	// TagFormatInfluxDB is format for InfluxDB StatsD telegraf plugin
++	//
++	// Docs: https://github.com/influxdata/telegraf/tree/master/plugins/inputs/statsd
++	TagFormatInfluxDB = &TagFormat{
++		Placement:         TagPlacementName,
++		FirstSeparator:    ",",
++		OtherSeparator:    ',',
++		KeyValueSeparator: '=',
++	}
++
++	// TagFormatDatadog is format for DogStatsD (Datadog Agent)
++	//
++	// Docs: https://docs.datadoghq.com/developers/dogstatsd/#datagram-format
++	TagFormatDatadog = &TagFormat{
++		Placement:         TagPlacementSuffix,
++		FirstSeparator:    "|#",
++		OtherSeparator:    ',',
++		KeyValueSeparator: ':',
++	}
++)
+--- /dev/null
++++ prometheus-statsd-exporter-0.8.0+ds1/vendor/vendor.json
+@@ -0,0 +1,13 @@
++{
++	"comment": "",
++	"ignore": "test",
++	"package": [
++		{
++			"checksumSHA1": "bYjOp5OWI5eUaudXwgpIR6NsFfA=",
++			"path": "github.com/smira/go-statsd",
++			"revision": "cc7284a3c62c2b11a644e2a7e76164e8752c0401",
++			"revisionTime": "2018-09-12T15:54:01Z"
++		}
++	],
++	"rootPath": "github.com/prometheus/statsd_exporter"
++}
