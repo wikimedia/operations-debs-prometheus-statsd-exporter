@@ -1,3 +1,9 @@
+prometheus-statsd-exporter (0.8.0+ds1-2) stretch-wikimedia; urgency=medium
+
+  * Update relay patch to relay events only when requested
+
+ -- Filippo Giunchedi <filippo@debian.org>  Thu, 15 Nov 2018 10:04:34 +0100
+
 prometheus-statsd-exporter (0.8.0+ds1-1) stretch-wikimedia; urgency=medium
 
   * New upstream release
