@@ -26,7 +26,7 @@ Index: prometheus-statsd-exporter/exporter.go
  )
  
  const (
-@@ -543,20 +546,68 @@ samples:
+@@ -543,20 +546,70 @@ samples:
  }
  
  type StatsDUDPListener struct {
@@ -69,7 +69,9 @@ Index: prometheus-statsd-exporter/exporter.go
 +	relay_chan := make(chan Events, 4096)
 +	defer close(relay_chan)
 +
-+	go l.relayEvents(relay_chan)
++	if l.relayAddr != "" {
++		go l.relayEvents(relay_chan)
++	}
 +
  	buf := make([]byte, 65535)
  	for {
