@@ -56,7 +56,7 @@ Index: prometheus-statsd-exporter/exporter.go
 +				case *CounterEvent:
 +					client.Incr(event.MetricName(), int64(event.Value()))
 +				case *GaugeEvent:
-+					client.Gauge(event.MetricName(), int64(event.Value()))
++					client.FGauge(event.MetricName(), event.Value())
 +				case *TimerEvent:
 +					client.Timing(event.MetricName(), int64(event.Value()))
 +				}

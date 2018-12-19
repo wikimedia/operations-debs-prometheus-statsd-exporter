@@ -1,3 +1,9 @@
+prometheus-statsd-exporter (0.8.0+ds1-3) stretch-wikimedia; urgency=medium
+
+  * Relay gauges as floats. Float counters support is https://github.com/smira/go-statsd/pull/15
+
+ -- Filippo Giunchedi <filippo@debian.org>  Thu, 20 Dec 2018 14:12:45 +0100
+
 prometheus-statsd-exporter (0.8.0+ds1-2) stretch-wikimedia; urgency=medium
 
   * Update relay patch to relay events only when requested
