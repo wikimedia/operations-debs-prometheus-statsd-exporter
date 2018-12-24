@@ -54,7 +54,7 @@ Index: prometheus-statsd-exporter/exporter.go
 +			for _, event := range events {
 +				switch event.(type) {
 +				case *CounterEvent:
-+					client.Incr(event.MetricName(), int64(event.Value()))
++					client.FIncr(event.MetricName(), event.Value())
 +				case *GaugeEvent:
 +					client.FGauge(event.MetricName(), event.Value())
 +				case *TimerEvent:

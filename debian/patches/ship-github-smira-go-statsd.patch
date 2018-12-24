@@ -1,8 +1,10 @@
 Description: Ship go-statsd client
 Author: Filippo Giunchedi <filippo@debian.org>
 
+Index: prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/LICENSE
+===================================================================
 --- /dev/null
-+++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/LICENSE
++++ prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/LICENSE
 @@ -0,0 +1,23 @@
 +The MIT License (MIT)
 +
@@ -27,8 +29,10 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 +IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 +CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+Index: prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/Makefile
+===================================================================
 --- /dev/null
-+++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/Makefile
++++ prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/Makefile
 @@ -0,0 +1,18 @@
 +all: test check bench
 +
@@ -48,8 +52,10 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +	gometalinter --vendored-linters --deadline=30s --cyclo-over=15 ./...
 +
 +.PHONY: deps bench test check
+Index: prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/README.md
+===================================================================
 --- /dev/null
-+++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/README.md
++++ prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/README.md
 @@ -0,0 +1,137 @@
 +# go-statsd
 +
@@ -188,8 +194,10 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +
 +
 +[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fsmira%2Fgo-statsd.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fsmira%2Fgo-statsd?ref=badge_large)
+Index: prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/buffers.go
+===================================================================
 --- /dev/null
-+++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/buffers.go
++++ prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/buffers.go
 @@ -0,0 +1,63 @@
 +package statsd
 +
@@ -222,41 +230,43 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +// checkBuf checks current buffer for overflow, and flushes buffer up to lastLen bytes on overflow
 +//
 +// overflow part is preserved in flushBuf
-+func (c *Client) checkBuf(lastLen int) {
-+	if len(c.buf) > c.options.MaxPacketSize {
-+		c.flushBuf(lastLen)
++func (t *transport) checkBuf(lastLen int) {
++	if len(t.buf) > t.maxPacketSize {
++		t.flushBuf(lastLen)
 +	}
 +}
 +
 +// flushBuf sends buffer to the queue and initializes new buffer
-+func (c *Client) flushBuf(length int) {
-+	sendBuf := c.buf[0:length]
-+	tail := c.buf[length:len(c.buf)]
++func (t *transport) flushBuf(length int) {
++	sendBuf := t.buf[0:length]
++	tail := t.buf[length:len(t.buf)]
 +
 +	// get new buffer
 +	select {
-+	case c.buf = <-c.bufPool:
-+		c.buf = c.buf[0:0]
++	case t.buf = <-t.bufPool:
++		t.buf = t.buf[0:0]
 +	default:
-+		c.buf = make([]byte, 0, c.bufSize)
++		t.buf = make([]byte, 0, t.bufSize)
 +	}
 +
 +	// copy tail to the new buffer
-+	c.buf = append(c.buf, tail...)
++	t.buf = append(t.buf, tail...)
 +
 +	// flush current buffer
 +	select {
-+	case c.sendQueue <- sendBuf:
++	case t.sendQueue <- sendBuf:
 +	default:
 +		// flush failed, we lost some data
-+		atomic.AddInt64(&c.lostPacketsPeriod, 1)
-+		atomic.AddInt64(&c.lostPacketsOverall, 1)
++		atomic.AddInt64(&t.lostPacketsPeriod, 1)
++		atomic.AddInt64(&t.lostPacketsOverall, 1)
 +	}
 +
 +}
+Index: prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/client.go
+===================================================================
 --- /dev/null
-+++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/client.go
-@@ -0,0 +1,307 @@
++++ prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/client.go
+@@ -0,0 +1,372 @@
 +package statsd
 +
 +/*
@@ -294,19 +304,27 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +
 +// Client implements statsd client
 +type Client struct {
-+	options ClientOptions
++	trans        *transport
++	metricPrefix string
++	defaultTags  []Tag
++}
 +
-+	bufPool chan []byte
-+	buf     []byte
-+	bufSize int
-+	bufLock sync.Mutex
++type transport struct {
++	maxPacketSize int
++	tagFormat     *TagFormat
 +
++	bufPool   chan []byte
++	buf       []byte
++	bufSize   int
++	bufLock   sync.Mutex
 +	sendQueue chan []byte
 +
-+	shutdown   chan struct{}
-+	shutdownWg sync.WaitGroup
++	shutdown     chan struct{}
++	shutdownOnce sync.Once
++	shutdownWg   sync.WaitGroup
 +
-+	lostPacketsPeriod, lostPacketsOverall int64
++	lostPacketsPeriod  int64
++	lostPacketsOverall int64
 +}
 +
 +// NewClient creates new statsd client and starts background processing
@@ -315,62 +333,90 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +//
 +// Client settings could be controlled via functions of type Option
 +func NewClient(addr string, options ...Option) *Client {
-+	c := &Client{
-+		options: ClientOptions{
-+			Addr:              addr,
-+			MetricPrefix:      DefaultMetricPrefix,
-+			MaxPacketSize:     DefaultMaxPacketSize,
-+			FlushInterval:     DefaultFlushInterval,
-+			ReconnectInterval: DefaultReconnectInterval,
-+			ReportInterval:    DefaultReportInterval,
-+			RetryTimeout:      DefaultRetryTimeout,
-+			Logger:            log.New(os.Stderr, DefaultLogPrefix, log.LstdFlags),
-+			BufPoolCapacity:   DefaultBufPoolCapacity,
-+			SendQueueCapacity: DefaultSendQueueCapacity,
-+			SendLoopCount:     DefaultSendLoopCount,
-+			TagFormat:         TagFormatInfluxDB,
-+		},
-+
-+		shutdown: make(chan struct{}),
++	opts := ClientOptions{
++		Addr:              addr,
++		MetricPrefix:      DefaultMetricPrefix,
++		MaxPacketSize:     DefaultMaxPacketSize,
++		FlushInterval:     DefaultFlushInterval,
++		ReconnectInterval: DefaultReconnectInterval,
++		ReportInterval:    DefaultReportInterval,
++		RetryTimeout:      DefaultRetryTimeout,
++		Logger:            log.New(os.Stderr, DefaultLogPrefix, log.LstdFlags),
++		BufPoolCapacity:   DefaultBufPoolCapacity,
++		SendQueueCapacity: DefaultSendQueueCapacity,
++		SendLoopCount:     DefaultSendLoopCount,
++		TagFormat:         TagFormatInfluxDB,
 +	}
 +
++	c := &Client{
++		trans: &transport{
++			shutdown: make(chan struct{}),
++		},
++	}
 +	// 1024 is room for overflow metric
-+	c.bufSize = c.options.MaxPacketSize + 1024
++	c.trans.bufSize = opts.MaxPacketSize + 1024
 +
 +	for _, option := range options {
-+		option(&c.options)
++		option(&opts)
 +	}
 +
-+	c.buf = make([]byte, 0, c.bufSize)
-+	c.bufPool = make(chan []byte, c.options.BufPoolCapacity)
-+	c.sendQueue = make(chan []byte, c.options.SendQueueCapacity)
++	c.metricPrefix = opts.MetricPrefix
++	c.defaultTags = opts.DefaultTags
 +
-+	go c.flushLoop()
++	c.trans.tagFormat = opts.TagFormat
++	c.trans.maxPacketSize = opts.MaxPacketSize
++	c.trans.buf = make([]byte, 0, c.trans.bufSize)
++	c.trans.bufPool = make(chan []byte, opts.BufPoolCapacity)
++	c.trans.sendQueue = make(chan []byte, opts.SendQueueCapacity)
 +
-+	for i := 0; i < c.options.SendLoopCount; i++ {
-+		c.shutdownWg.Add(1)
-+		go c.sendLoop()
++	go c.trans.flushLoop(opts.FlushInterval)
++
++	for i := 0; i < opts.SendLoopCount; i++ {
++		c.trans.shutdownWg.Add(1)
++		go c.trans.sendLoop(opts.Addr, opts.ReconnectInterval, opts.RetryTimeout, opts.Logger)
 +	}
 +
-+	if c.options.ReportInterval > 0 {
-+		c.shutdownWg.Add(1)
-+		go c.reportLoop()
++	if opts.ReportInterval > 0 {
++		c.trans.shutdownWg.Add(1)
++		go c.trans.reportLoop(opts.ReportInterval, opts.Logger)
 +	}
 +
 +	return c
 +}
 +
-+// Close stops the client
++// Close stops the client and all its clones. Calling it on a clone has the
++// same effect as calling it on the original client - it is stopped with all
++// its clones.
 +func (c *Client) Close() error {
-+	close(c.shutdown)
-+	c.shutdownWg.Wait()
-+
++	c.trans.close()
 +	return nil
++}
++
++func (t *transport) close() {
++	t.shutdownOnce.Do(func() {
++		close(t.shutdown)
++	})
++	t.shutdownWg.Wait()
++}
++
++// CloneWithPrefix returns a clone of the original client with different metricPrefix.
++func (c *Client) CloneWithPrefix(prefix string) *Client {
++	clone := *c
++	clone.metricPrefix = prefix
++	return &clone
++}
++
++// CloneWithPrefixExtension returns a clone of the original client with the
++// original prefixed extended with the specified string.
++func (c *Client) CloneWithPrefixExtension(extension string) *Client {
++	clone := *c
++	clone.metricPrefix = clone.metricPrefix + extension
++	return &clone
 +}
 +
 +// GetLostPackets returns number of packets lost during client lifecycle
 +func (c *Client) GetLostPackets() int64 {
-+	return atomic.LoadInt64(&c.lostPacketsOverall)
++	return atomic.LoadInt64(&c.trans.lostPacketsOverall)
 +}
 +
 +// Incr increments a counter metric
@@ -378,24 +424,24 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +// Often used to note a particular event, for example incoming web request.
 +func (c *Client) Incr(stat string, count int64, tags ...Tag) {
 +	if 0 != count {
-+		c.bufLock.Lock()
-+		lastLen := len(c.buf)
++		c.trans.bufLock.Lock()
++		lastLen := len(c.trans.buf)
 +
-+		c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
-+		c.buf = append(c.buf, []byte(stat)...)
-+		if c.options.TagFormat.Placement == TagPlacementName {
-+			c.buf = c.formatTags(c.buf, tags)
++		c.trans.buf = append(c.trans.buf, []byte(c.metricPrefix)...)
++		c.trans.buf = append(c.trans.buf, []byte(stat)...)
++		if c.trans.tagFormat.Placement == TagPlacementName {
++			c.trans.buf = c.formatTags(c.trans.buf, tags)
 +		}
-+		c.buf = append(c.buf, ':')
-+		c.buf = strconv.AppendInt(c.buf, count, 10)
-+		c.buf = append(c.buf, []byte("|c")...)
-+		if c.options.TagFormat.Placement == TagPlacementSuffix {
-+			c.buf = c.formatTags(c.buf, tags)
++		c.trans.buf = append(c.trans.buf, ':')
++		c.trans.buf = strconv.AppendInt(c.trans.buf, count, 10)
++		c.trans.buf = append(c.trans.buf, []byte("|c")...)
++		if c.trans.tagFormat.Placement == TagPlacementSuffix {
++			c.trans.buf = c.formatTags(c.trans.buf, tags)
 +		}
-+		c.buf = append(c.buf, '\n')
++		c.trans.buf = append(c.trans.buf, '\n')
 +
-+		c.checkBuf(lastLen)
-+		c.bufLock.Unlock()
++		c.trans.checkBuf(lastLen)
++		c.trans.bufLock.Unlock()
 +	}
 +}
 +
@@ -406,26 +452,55 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +	c.Incr(stat, -count, tags...)
 +}
 +
++// FIncr increments a float counter metric
++func (c *Client) FIncr(stat string, count float64, tags ...Tag) {
++	if 0 != count {
++		c.trans.bufLock.Lock()
++		lastLen := len(c.trans.buf)
++
++		c.trans.buf = append(c.trans.buf, []byte(c.metricPrefix)...)
++		c.trans.buf = append(c.trans.buf, []byte(stat)...)
++		if c.trans.tagFormat.Placement == TagPlacementName {
++			c.trans.buf = c.formatTags(c.trans.buf, tags)
++		}
++		c.trans.buf = append(c.trans.buf, ':')
++		c.trans.buf = strconv.AppendFloat(c.trans.buf, count, 'f', -1, 64)
++		c.trans.buf = append(c.trans.buf, []byte("|c")...)
++		if c.trans.tagFormat.Placement == TagPlacementSuffix {
++			c.trans.buf = c.formatTags(c.trans.buf, tags)
++		}
++		c.trans.buf = append(c.trans.buf, '\n')
++
++		c.trans.checkBuf(lastLen)
++		c.trans.bufLock.Unlock()
++	}
++}
++
++// FDecr decrements a float counter metric
++func (c *Client) FDecr(stat string, count float64, tags ...Tag) {
++	c.FIncr(stat, -count, tags...)
++}
++
 +// Timing tracks a duration event, the time delta must be given in milliseconds
 +func (c *Client) Timing(stat string, delta int64, tags ...Tag) {
-+	c.bufLock.Lock()
-+	lastLen := len(c.buf)
++	c.trans.bufLock.Lock()
++	lastLen := len(c.trans.buf)
 +
-+	c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
-+	c.buf = append(c.buf, []byte(stat)...)
-+	if c.options.TagFormat.Placement == TagPlacementName {
-+		c.buf = c.formatTags(c.buf, tags)
++	c.trans.buf = append(c.trans.buf, []byte(c.metricPrefix)...)
++	c.trans.buf = append(c.trans.buf, []byte(stat)...)
++	if c.trans.tagFormat.Placement == TagPlacementName {
++		c.trans.buf = c.formatTags(c.trans.buf, tags)
 +	}
-+	c.buf = append(c.buf, ':')
-+	c.buf = strconv.AppendInt(c.buf, delta, 10)
-+	c.buf = append(c.buf, []byte("|ms")...)
-+	if c.options.TagFormat.Placement == TagPlacementSuffix {
-+		c.buf = c.formatTags(c.buf, tags)
++	c.trans.buf = append(c.trans.buf, ':')
++	c.trans.buf = strconv.AppendInt(c.trans.buf, delta, 10)
++	c.trans.buf = append(c.trans.buf, []byte("|ms")...)
++	if c.trans.tagFormat.Placement == TagPlacementSuffix {
++		c.trans.buf = c.formatTags(c.trans.buf, tags)
 +	}
-+	c.buf = append(c.buf, '\n')
++	c.trans.buf = append(c.trans.buf, '\n')
 +
-+	c.checkBuf(lastLen)
-+	c.bufLock.Unlock()
++	c.trans.checkBuf(lastLen)
++	c.trans.bufLock.Unlock()
 +}
 +
 +// PrecisionTiming track a duration event, the time delta has to be a duration
@@ -433,46 +508,46 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +// Usually request processing time, time to run database query, etc. are used with
 +// this metric type.
 +func (c *Client) PrecisionTiming(stat string, delta time.Duration, tags ...Tag) {
-+	c.bufLock.Lock()
-+	lastLen := len(c.buf)
++	c.trans.bufLock.Lock()
++	lastLen := len(c.trans.buf)
 +
-+	c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
-+	c.buf = append(c.buf, []byte(stat)...)
-+	if c.options.TagFormat.Placement == TagPlacementName {
-+		c.buf = c.formatTags(c.buf, tags)
++	c.trans.buf = append(c.trans.buf, []byte(c.metricPrefix)...)
++	c.trans.buf = append(c.trans.buf, []byte(stat)...)
++	if c.trans.tagFormat.Placement == TagPlacementName {
++		c.trans.buf = c.formatTags(c.trans.buf, tags)
 +	}
-+	c.buf = append(c.buf, ':')
-+	c.buf = strconv.AppendFloat(c.buf, float64(delta)/float64(time.Millisecond), 'f', -1, 64)
-+	c.buf = append(c.buf, []byte("|ms")...)
-+	if c.options.TagFormat.Placement == TagPlacementSuffix {
-+		c.buf = c.formatTags(c.buf, tags)
++	c.trans.buf = append(c.trans.buf, ':')
++	c.trans.buf = strconv.AppendFloat(c.trans.buf, float64(delta)/float64(time.Millisecond), 'f', -1, 64)
++	c.trans.buf = append(c.trans.buf, []byte("|ms")...)
++	if c.trans.tagFormat.Placement == TagPlacementSuffix {
++		c.trans.buf = c.formatTags(c.trans.buf, tags)
 +	}
-+	c.buf = append(c.buf, '\n')
++	c.trans.buf = append(c.trans.buf, '\n')
 +
-+	c.checkBuf(lastLen)
-+	c.bufLock.Unlock()
++	c.trans.checkBuf(lastLen)
++	c.trans.bufLock.Unlock()
 +}
 +
 +func (c *Client) igauge(stat string, sign []byte, value int64, tags ...Tag) {
-+	c.bufLock.Lock()
-+	lastLen := len(c.buf)
++	c.trans.bufLock.Lock()
++	lastLen := len(c.trans.buf)
 +
-+	c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
-+	c.buf = append(c.buf, []byte(stat)...)
-+	if c.options.TagFormat.Placement == TagPlacementName {
-+		c.buf = c.formatTags(c.buf, tags)
++	c.trans.buf = append(c.trans.buf, []byte(c.metricPrefix)...)
++	c.trans.buf = append(c.trans.buf, []byte(stat)...)
++	if c.trans.tagFormat.Placement == TagPlacementName {
++		c.trans.buf = c.formatTags(c.trans.buf, tags)
 +	}
-+	c.buf = append(c.buf, ':')
-+	c.buf = append(c.buf, sign...)
-+	c.buf = strconv.AppendInt(c.buf, value, 10)
-+	c.buf = append(c.buf, []byte("|g")...)
-+	if c.options.TagFormat.Placement == TagPlacementSuffix {
-+		c.buf = c.formatTags(c.buf, tags)
++	c.trans.buf = append(c.trans.buf, ':')
++	c.trans.buf = append(c.trans.buf, sign...)
++	c.trans.buf = strconv.AppendInt(c.trans.buf, value, 10)
++	c.trans.buf = append(c.trans.buf, []byte("|g")...)
++	if c.trans.tagFormat.Placement == TagPlacementSuffix {
++		c.trans.buf = c.formatTags(c.trans.buf, tags)
 +	}
-+	c.buf = append(c.buf, '\n')
++	c.trans.buf = append(c.trans.buf, '\n')
 +
-+	c.checkBuf(lastLen)
-+	c.bufLock.Unlock()
++	c.trans.checkBuf(lastLen)
++	c.trans.bufLock.Unlock()
 +}
 +
 +// Gauge sets or updates constant value for the interval
@@ -502,25 +577,25 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +}
 +
 +func (c *Client) fgauge(stat string, sign []byte, value float64, tags ...Tag) {
-+	c.bufLock.Lock()
-+	lastLen := len(c.buf)
++	c.trans.bufLock.Lock()
++	lastLen := len(c.trans.buf)
 +
-+	c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
-+	c.buf = append(c.buf, []byte(stat)...)
-+	if c.options.TagFormat.Placement == TagPlacementName {
-+		c.buf = c.formatTags(c.buf, tags)
++	c.trans.buf = append(c.trans.buf, []byte(c.metricPrefix)...)
++	c.trans.buf = append(c.trans.buf, []byte(stat)...)
++	if c.trans.tagFormat.Placement == TagPlacementName {
++		c.trans.buf = c.formatTags(c.trans.buf, tags)
 +	}
-+	c.buf = append(c.buf, ':')
-+	c.buf = append(c.buf, sign...)
-+	c.buf = strconv.AppendFloat(c.buf, value, 'f', -1, 64)
-+	c.buf = append(c.buf, []byte("|g")...)
-+	if c.options.TagFormat.Placement == TagPlacementSuffix {
-+		c.buf = c.formatTags(c.buf, tags)
++	c.trans.buf = append(c.trans.buf, ':')
++	c.trans.buf = append(c.trans.buf, sign...)
++	c.trans.buf = strconv.AppendFloat(c.trans.buf, value, 'f', -1, 64)
++	c.trans.buf = append(c.trans.buf, []byte("|g")...)
++	if c.trans.tagFormat.Placement == TagPlacementSuffix {
++		c.trans.buf = c.formatTags(c.trans.buf, tags)
 +	}
-+	c.buf = append(c.buf, '\n')
++	c.trans.buf = append(c.trans.buf, '\n')
 +
-+	c.checkBuf(lastLen)
-+	c.bufLock.Unlock()
++	c.trans.checkBuf(lastLen)
++	c.trans.bufLock.Unlock()
 +}
 +
 +// FGauge sends a floating point value for a gauge
@@ -545,27 +620,29 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +//
 +// Statsd server will provide cardinality of the set over aggregation period.
 +func (c *Client) SetAdd(stat string, value string, tags ...Tag) {
-+	c.bufLock.Lock()
-+	lastLen := len(c.buf)
++	c.trans.bufLock.Lock()
++	lastLen := len(c.trans.buf)
 +
-+	c.buf = append(c.buf, []byte(c.options.MetricPrefix)...)
-+	c.buf = append(c.buf, []byte(stat)...)
-+	if c.options.TagFormat.Placement == TagPlacementName {
-+		c.buf = c.formatTags(c.buf, tags)
++	c.trans.buf = append(c.trans.buf, []byte(c.metricPrefix)...)
++	c.trans.buf = append(c.trans.buf, []byte(stat)...)
++	if c.trans.tagFormat.Placement == TagPlacementName {
++		c.trans.buf = c.formatTags(c.trans.buf, tags)
 +	}
-+	c.buf = append(c.buf, ':')
-+	c.buf = append(c.buf, []byte(value)...)
-+	c.buf = append(c.buf, []byte("|s")...)
-+	if c.options.TagFormat.Placement == TagPlacementSuffix {
-+		c.buf = c.formatTags(c.buf, tags)
++	c.trans.buf = append(c.trans.buf, ':')
++	c.trans.buf = append(c.trans.buf, []byte(value)...)
++	c.trans.buf = append(c.trans.buf, []byte("|s")...)
++	if c.trans.tagFormat.Placement == TagPlacementSuffix {
++		c.trans.buf = c.formatTags(c.trans.buf, tags)
 +	}
-+	c.buf = append(c.buf, '\n')
++	c.trans.buf = append(c.trans.buf, '\n')
 +
-+	c.checkBuf(lastLen)
-+	c.bufLock.Unlock()
++	c.trans.checkBuf(lastLen)
++	c.trans.bufLock.Unlock()
 +}
+Index: prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/loops.go
+===================================================================
 --- /dev/null
-+++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/loops.go
++++ prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/loops.go
 @@ -0,0 +1,142 @@
 +package statsd
 +
@@ -600,65 +677,65 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +)
 +
 +// flushLoop makes sure metrics are flushed every flushInterval
-+func (c *Client) flushLoop() {
++func (t *transport) flushLoop(flushInterval time.Duration) {
 +	var flushC <-chan time.Time
 +
-+	if c.options.FlushInterval > 0 {
-+		flushTicker := time.NewTicker(c.options.FlushInterval)
++	if flushInterval > 0 {
++		flushTicker := time.NewTicker(flushInterval)
 +		defer flushTicker.Stop()
 +		flushC = flushTicker.C
 +	}
 +
 +	for {
 +		select {
-+		case <-c.shutdown:
-+			c.bufLock.Lock()
-+			if len(c.buf) > 0 {
-+				c.flushBuf(len(c.buf))
++		case <-t.shutdown:
++			t.bufLock.Lock()
++			if len(t.buf) > 0 {
++				t.flushBuf(len(t.buf))
 +			}
-+			c.bufLock.Unlock()
++			t.bufLock.Unlock()
 +
-+			close(c.sendQueue)
++			close(t.sendQueue)
 +			return
 +		case <-flushC:
-+			c.bufLock.Lock()
-+			if len(c.buf) > 0 {
-+				c.flushBuf(len(c.buf))
++			t.bufLock.Lock()
++			if len(t.buf) > 0 {
++				t.flushBuf(len(t.buf))
 +			}
-+			c.bufLock.Unlock()
++			t.bufLock.Unlock()
 +		}
 +	}
 +}
 +
 +// sendLoop handles packet delivery over UDP and periodic reconnects
-+func (c *Client) sendLoop() {
++func (t *transport) sendLoop(addr string, reconnectInterval, retryTimeout time.Duration, log SomeLogger) {
 +	var (
 +		sock       net.Conn
 +		err        error
 +		reconnectC <-chan time.Time
 +	)
 +
-+	if c.options.ReconnectInterval > 0 {
-+		reconnectTicker := time.NewTicker(c.options.ReconnectInterval)
++	if reconnectInterval > 0 {
++		reconnectTicker := time.NewTicker(reconnectInterval)
 +		defer reconnectTicker.Stop()
 +		reconnectC = reconnectTicker.C
 +	}
 +
 +RECONNECT:
 +	// Attempt to connect
-+	sock, err = net.Dial("udp", c.options.Addr)
++	sock, err = net.Dial("udp", addr)
 +	if err != nil {
-+		c.options.Logger.Printf("[STATSD] Error connecting to server: %s", err)
++		log.Printf("[STATSD] Error connecting to server: %s", err)
 +		goto WAIT
 +	}
 +
 +	for {
 +		select {
-+		case buf, ok := <-c.sendQueue:
++		case buf, ok := <-t.sendQueue:
 +			// Get a buffer from the queue
 +			if !ok {
 +				_ = sock.Close() // nolint: gosec
-+				c.shutdownWg.Done()
++				t.shutdownWg.Done()
 +				return
 +			}
 +
@@ -666,7 +743,7 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +				// cut off \n in the end
 +				_, err := sock.Write(buf[0 : len(buf)-1])
 +				if err != nil {
-+					c.options.Logger.Printf("[STATSD] Error writing to socket: %s", err)
++					log.Printf("[STATSD] Error writing to socket: %s", err)
 +					_ = sock.Close() // nolint: gosec
 +					goto WAIT
 +				}
@@ -674,7 +751,7 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +
 +			// return buffer to the pool
 +			select {
-+			case c.bufPool <- buf:
++			case t.bufPool <- buf:
 +			default:
 +				// pool is full, let GC handle the buf
 +			}
@@ -686,31 +763,33 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +
 +WAIT:
 +	// Wait for a while
-+	time.Sleep(c.options.RetryTimeout)
++	time.Sleep(retryTimeout)
 +	goto RECONNECT
 +}
 +
 +// reportLoop reports periodically number of packets lost
-+func (c *Client) reportLoop() {
-+	defer c.shutdownWg.Done()
++func (t *transport) reportLoop(reportInterval time.Duration, log SomeLogger) {
++	defer t.shutdownWg.Done()
 +
-+	reportTicker := time.NewTicker(c.options.ReportInterval)
++	reportTicker := time.NewTicker(reportInterval)
 +	defer reportTicker.Stop()
 +
 +	for {
 +		select {
-+		case <-c.shutdown:
++		case <-t.shutdown:
 +			return
 +		case <-reportTicker.C:
-+			lostPeriod := atomic.SwapInt64(&c.lostPacketsPeriod, 0)
++			lostPeriod := atomic.SwapInt64(&t.lostPacketsPeriod, 0)
 +			if lostPeriod > 0 {
-+				c.options.Logger.Printf("[STATSD] %d packets lost (overflow)", lostPeriod)
++				log.Printf("[STATSD] %d packets lost (overflow)", lostPeriod)
 +			}
 +		}
 +	}
 +}
+Index: prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/options.go
+===================================================================
 --- /dev/null
-+++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/options.go
++++ prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/options.go
 @@ -0,0 +1,263 @@
 +package statsd
 +
@@ -767,7 +846,7 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +	// Addr is statsd server address in "host:port" format
 +	Addr string
 +
-+	// MetricPrefix is prefix to prepend to every metric being sent
++	// MetricPrefix is metricPrefix to prepend to every metric being sent
 +	//
 +	// If not set defaults to empty string
 +	MetricPrefix string
@@ -808,7 +887,7 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +
 +	// Logger is used by statsd client to report errors and lost packets
 +	//
-+	// If not set, default logger to stderr with prefix `[STATSD] ` is being used
++	// If not set, default logger to stderr with metricPrefix `[STATSD] ` is being used
 +	Logger SomeLogger
 +
 +	// BufPoolCapacity controls size of pre-allocated buffer cache
@@ -845,15 +924,15 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +	DefaultTags []Tag
 +}
 +
-+// Option is type for option implementation
++// Option is type for option transport
 +type Option func(c *ClientOptions)
 +
-+// MetricPrefix is prefix to prepend to every metric being sent
++// MetricPrefix is metricPrefix to prepend to every metric being sent
 +//
 +// Usually metrics are prefixed with app name, e.g. `app.`.
-+// To avoid providing this prefix for every metric being collected,
++// To avoid providing this metricPrefix for every metric being collected,
 +// and to enable shared libraries to collect metric under app name,
-+// use MetricPrefix to set global prefix for all the app metrics,
++// use MetricPrefix to set global metricPrefix for all the app metrics,
 +// e.g. `MetricPrefix("app".)`.
 +//
 +// If not set defaults to empty string
@@ -918,7 +997,7 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +
 +// Logger is used by statsd client to report errors and lost packets
 +//
-+// If not set, default logger to stderr with prefix `[STATSD] ` is being used
++// If not set, default logger to stderr with metricPrefix `[STATSD] ` is being used
 +func Logger(logger SomeLogger) Option {
 +	return func(c *ClientOptions) {
 +		c.Logger = logger
@@ -975,8 +1054,10 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +		c.DefaultTags = tags
 +	}
 +}
+Index: prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/statsd.go
+===================================================================
 --- /dev/null
-+++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/statsd.go
++++ prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/statsd.go
 @@ -0,0 +1,88 @@
 +/*
 +Package statsd implements high-performance, zero-allocation statsd client.
@@ -1066,8 +1147,10 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +SOFTWARE.
 +
 +*/
+Index: prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/tags.go
+===================================================================
 --- /dev/null
-+++ prometheus-statsd-exporter-0.8.0+ds1/vendor/github.com/smira/go-statsd/tags.go
++++ prometheus-statsd-exporter/vendor/github.com/smira/go-statsd/tags.go
 @@ -0,0 +1,130 @@
 +package statsd
 +
@@ -1155,23 +1238,23 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +}
 +
 +func (c *Client) formatTags(buf []byte, tags []Tag) []byte {
-+	tagsLen := len(c.options.DefaultTags) + len(tags)
++	tagsLen := len(c.defaultTags) + len(tags)
 +	if tagsLen == 0 {
 +		return buf
 +	}
 +
-+	buf = append(buf, []byte(c.options.TagFormat.FirstSeparator)...)
-+	for i := range c.options.DefaultTags {
-+		buf = c.options.DefaultTags[i].Append(buf, c.options.TagFormat)
++	buf = append(buf, []byte(c.trans.tagFormat.FirstSeparator)...)
++	for i := range c.defaultTags {
++		buf = c.defaultTags[i].Append(buf, c.trans.tagFormat)
 +		if i != tagsLen-1 {
-+			buf = append(buf, c.options.TagFormat.OtherSeparator)
++			buf = append(buf, c.trans.tagFormat.OtherSeparator)
 +		}
 +	}
 +
 +	for i := range tags {
-+		buf = tags[i].Append(buf, c.options.TagFormat)
-+		if i+len(c.options.DefaultTags) != tagsLen-1 {
-+			buf = append(buf, c.options.TagFormat.OtherSeparator)
++		buf = tags[i].Append(buf, c.trans.tagFormat)
++		if i+len(c.defaultTags) != tagsLen-1 {
++			buf = append(buf, c.trans.tagFormat.OtherSeparator)
 +		}
 +	}
 +
@@ -1199,18 +1282,20 @@ Author: Filippo Giunchedi <filippo@debian.org>
 +		KeyValueSeparator: ':',
 +	}
 +)
+Index: prometheus-statsd-exporter/vendor/vendor.json
+===================================================================
 --- /dev/null
-+++ prometheus-statsd-exporter-0.8.0+ds1/vendor/vendor.json
++++ prometheus-statsd-exporter/vendor/vendor.json
 @@ -0,0 +1,13 @@
 +{
 +	"comment": "",
 +	"ignore": "test",
 +	"package": [
 +		{
-+			"checksumSHA1": "bYjOp5OWI5eUaudXwgpIR6NsFfA=",
++			"checksumSHA1": "1DPAyVfY6V0AvY24BUciw9U0rD0=",
 +			"path": "github.com/smira/go-statsd",
-+			"revision": "cc7284a3c62c2b11a644e2a7e76164e8752c0401",
-+			"revisionTime": "2018-09-12T15:54:01Z"
++			"revision": "62ddc7a5f538c7829c4a1452eeef50dbc8be1fec",
++			"revisionTime": "2018-12-21T20:50:30Z"
 +		}
 +	],
 +	"rootPath": "github.com/prometheus/statsd_exporter"
