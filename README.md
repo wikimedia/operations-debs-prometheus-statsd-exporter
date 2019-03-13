@@ -47,6 +47,7 @@ NOTE: Version 0.7.0 switched to the [kingpin](https://github.com/alecthomas/king
 * multiple short flags can be combined (but there currently is only one)
 * flag processing stops at the first `--`
 
+    ```
     $ go build
     $ ./statsd_exporter --help
     usage: statsd_exporter [<flags>]
@@ -81,6 +82,7 @@ NOTE: Version 0.7.0 switched to the [kingpin](https://github.com/alecthomas/king
                               "logger:syslog?appname=bob&local=7" or
                               "logger:stdout?json=true"
           --version           Show application version.
+    ```
 
 ## Tests
 
@@ -89,8 +91,10 @@ NOTE: Version 0.7.0 switched to the [kingpin](https://github.com/alecthomas/king
 ## Metric Mapping and Configuration
 
 The `statsd_exporter` can be configured to translate specific dot-separated StatsD
-metrics into labeled Prometheus metrics via a simple mapping language. A
-mapping definition starts with a line matching the StatsD metric in question,
+metrics into labeled Prometheus metrics via a simple mapping language. The config
+file is watched for changes and automatically reloaded.
+
+A mapping definition starts with a line matching the StatsD metric in question,
 with `*`s acting as wildcards for each dot-separated metric component. The
 lines following the matching expression must contain one `label="value"` pair
 each, and at least define the metric name (label name `name`). The Prometheus
@@ -268,6 +272,7 @@ defaults:
   buckets: [.005, .01, .025, .05, .1, .25, .5, 1, 2.5 ]
   match_type: glob
   glob_disable_ordering: false
+  ttl: 0 # metrics do not expire
 mappings:
 # This will be a histogram using the buckets set in `defaults`.
 - match: test.timing.*.*.*
@@ -349,6 +354,18 @@ mappings:
 ```
 
 Possible values for `match_metric_type` are `gauge`, `counter` and `timer`.
+
+### Time series expiration
+
+The `ttl` parameter can be used to define the expiration time for stale metrics.
+The value is a time duration with valid time units: "ns", "us" (or "µs"),
+"ms", "s", "m", "h". For example, `ttl: 1m20s`. `0` value is used to indicate
+metrics that do not expire.
+
+ TTL configuration is stored for each mapped metric name/labels combination
+ whenever new samples are received. This means that you cannot immediately
+ expire a metric only by changing the mapping configuration. At least one
+ sample must be received for updated mappings to take effect.
 
 ## Using Docker
 

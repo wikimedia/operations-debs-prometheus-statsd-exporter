@@ -13,8 +13,7 @@
 
 include Makefile.common
 
-STATICCHECK_IGNORE = \
-  github.com/prometheus/statsd_exporter/main.go:SA1019 \
+STATICCHECK_IGNORE =
 
 DOCKER_IMAGE_NAME       ?= statsd-exporter
 

@@ -15,6 +15,7 @@ package mapper
 
 import (
 	"testing"
+	"time"
 )
 
 type mappings map[string]struct {
@@ -22,6 +23,7 @@ type mappings map[string]struct {
 	labels     map[string]string
 	quantiles  []metricObjective
 	notPresent bool
+	ttl        time.Duration
 }
 
 func TestMetricMapperYAML(t *testing.T) {
@@ -165,6 +167,50 @@ mappings:
 					name: "testb",
 					labels: map[string]string{
 						"label": "justatest_foo",
+					},
+				},
+				"backtrack.justatest.aaa": {
+					name: "testa",
+					labels: map[string]string{
+						"label": "_foo",
+					},
+				},
+			},
+		},
+		//Config with backtracking, the non-matched rule has star(s)
+		// A metric like full.name.anothertest will first match full.name.* and then tries
+		// to match *.dummy.* and then failed.
+		// This test case makes sure the captures in the non-matched later rule
+		// doesn't affect the captures in the first matched rule.
+		{
+			config: `
+defaults:
+  glob_disable_ordering: false
+mappings:
+- match: '*.dummy.*'
+  name: metric_one
+  labels:
+    system: $1
+    attribute: $2
+- match: 'full.name.*'
+  name: metric_two
+  labels:
+    system: static
+    attribute: $1
+`,
+			mappings: mappings{
+				"whatever.dummy.test": {
+					name: "metric_one",
+					labels: map[string]string{
+						"system":    "whatever",
+						"attribute": "test",
+					},
+				},
+				"full.name.anothertest": {
+					name: "metric_two",
+					labels: map[string]string{
+						"system":    "static",
+						"attribute": "anothertest",
 					},
 				},
 			},
@@ -559,6 +605,66 @@ mappings:
 				},
 			},
 		},
+		// Config that has a ttl.
+		{
+			config: `mappings:
+- match: web.*
+  name: "web"
+  ttl: 10s
+  labels:
+    site: "$1"`,
+			mappings: mappings{
+				"test.a": {},
+				"web.localhost": {
+					name: "web",
+					labels: map[string]string{
+						"site": "localhost",
+					},
+					ttl: time.Second * 10,
+				},
+			},
+		},
+		// Config that has a default ttl.
+		{
+			config: `defaults:
+  ttl: 1m2s
+mappings:
+- match: web.*
+  name: "web"
+  labels:
+    site: "$1"`,
+			mappings: mappings{
+				"test.a": {},
+				"web.localhost": {
+					name: "web",
+					labels: map[string]string{
+						"site": "localhost",
+					},
+					ttl: time.Minute + time.Second*2,
+				},
+			},
+		},
+		// Config that override a default ttl.
+		{
+			config: `defaults:
+  ttl: 1m2s
+mappings:
+- match: web.*
+  name: "web"
+  ttl: 5s
+  labels:
+    site: "$1"`,
+			mappings: mappings{
+				"test.a": {},
+				"web.localhost": {
+					name: "web",
+					labels: map[string]string{
+						"site": "localhost",
+					},
+					ttl: time.Second * 5,
+				},
+			},
+		},
 	}
 
 	mapper := MetricMapper{}
@@ -588,6 +694,9 @@ mappings:
 				if mapping.labels[label] != value {
 					t.Fatalf("%d.%q: Expected labels %v, got %v", i, metric, mapping, labels)
 				}
+			}
+			if mapping.ttl > 0 && mapping.ttl != m.Ttl {
+				t.Fatalf("%d.%q: Expected ttl of %s, got %s", i, metric, mapping.ttl.String(), m.Ttl.String())
 			}
 
 			if len(mapping.quantiles) != 0 {
