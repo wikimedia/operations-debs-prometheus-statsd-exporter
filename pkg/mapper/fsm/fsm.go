@@ -138,6 +138,7 @@ func (f *FSM) GetMapping(statsdMetric string, statsdMetricType string) (*mapping
 	var finalState *mappingState
 
 	captures := make([]string, len(matchFields))
+	finalCaptures := make([]string, len(matchFields))
 	// keep track of captured group so we don't need to do append() on captures
 	captureIdx := 0
 	filedsCount := len(matchFields)
@@ -193,6 +194,8 @@ func (f *FSM) GetMapping(statsdMetric string, statsdMetricType string) (*mapping
 				} else if finalState == nil || finalState.ResultPriority > state.ResultPriority {
 					// if we care about ordering, try to find a result with highest prioity
 					finalState = state
+					// do a deep copy to preserve current captures
+					copy(finalCaptures, captures)
 				}
 				break
 			}
@@ -224,8 +227,7 @@ func (f *FSM) GetMapping(statsdMetric string, statsdMetricType string) (*mapping
 			resumeFromBacktrack = true
 		}
 	}
-
-	return finalState, captures
+	return finalState, finalCaptures
 }
 
 // TestIfNeedBacktracking tests if backtrack is needed for given list of mappings
@@ -260,7 +262,7 @@ func TestIfNeedBacktracking(mappings []string, orderingDisabled bool) bool {
 		for i1, r1 := range rules {
 			currentRuleNeedBacktrack := false
 			re1 := rulesRE[i1]
-			if re1 == nil || strings.Index(r1, "*") == -1 {
+			if re1 == nil || !strings.Contains(r1, "*") {
 				continue
 			}
 			// if rule r1 is A.B.C.*.E.*, is there a rule r2 is A.B.C.D.x.x or A.B.C.*.E.F ? (x is any string or *)

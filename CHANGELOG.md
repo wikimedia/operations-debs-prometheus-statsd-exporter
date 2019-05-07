@@ -1,4 +1,18 @@
-## 0.8.0 / 2018-10-12
+## v0.9.0 / 2019-03-11
+
+* [ENHANCEMENT] Update the Prometheus client library to 0.9.2 ([#171](https://github.com/prometheus/statsd_exporter/pull/171))
+* [FEATURE] Metrics can now be expired with a per-mapping TTL ([#164](https://github.com/prometheus/statsd_exporter/pull/164))
+* [CHANGE] Timers that mapped to a summary are scaled to seconds, just like histograms ([#178](https://github.com/prometheus/statsd_exporter/pull/178))
+
+If you are using summaries, all your quantiles and `_total` will change by a factor of 1000.
+Adjust your queries and dashboards, or consider switching to histograms altogether.
+
+## v0.8.1 / 2018-12-05
+
+* [BUGFIX] Expose the counter for unmapped matches ([#161](https://github.com/prometheus/statsd_exporter/pull/161))
+* [BUGFIX] Unsuccessful backtracking does not clobber captures ([#169](https://github.com/prometheus/statsd_exporter/pull/169), fixes [#168](https://github.com/prometheus/statsd_exporter/issues/168))
+
+## v0.8.0 / 2018-10-12
 
 * [ENHANCEMENT] Speed up glob matching ([#157](https://github.com/prometheus/statsd_exporter/pull/157))
 
@@ -8,7 +22,7 @@ is logged.
 
 This major enhancement was contributed by [Wangchong Zhou](https://github.com/fffonion).
 
-## 0.7.0 / 2018-08-22
+## v0.7.0 / 2018-08-22
 
 This is a breaking release, but the migration is easy: command line flags now
 require two dashes (`--help` instead of `-help`). The previous flag library
