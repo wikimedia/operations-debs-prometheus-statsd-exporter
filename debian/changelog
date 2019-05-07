@@ -1,3 +1,11 @@
+prometheus-statsd-exporter (0.9.0+ds1-1) UNRELEASED; urgency=medium
+
+  * New upstream release
+    * debian/patches/unmapped_fix: drop, applied upstream
+    * debian/patches/relay_udp_traffic: refresh
+
+ -- Filippo Giunchedi <filippo@debian.org>  Tue, 07 May 2019 11:27:43 +0200
+
 prometheus-statsd-exporter (0.8.0+ds1-4) stretch-wikimedia; urgency=medium
 
   * Update github.com/smira/go-stats for float counters
