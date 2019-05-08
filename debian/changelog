@@ -1,4 +1,4 @@
-prometheus-statsd-exporter (0.9.0+ds1-1) UNRELEASED; urgency=medium
+prometheus-statsd-exporter (0.9.0+ds1-1) stretch-wikimedia; urgency=medium
 
   * New upstream release
     * debian/patches/unmapped_fix: drop, applied upstream
